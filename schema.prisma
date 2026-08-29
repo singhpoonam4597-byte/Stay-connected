@@ -1,0 +1,301 @@
+// This is your Prisma schema file for a production-grade chat/social platform
+// Reference: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USER MODEL - Core user identity and presence
+// ============================================================================
+model User {
+  id                    String     @id @default(cuid())
+  email                 String     @unique @db.VarChar(255)
+  username              String     @unique @db.VarChar(50)
+  displayName           String?    @db.VarChar(100)
+  password              String     @db.VarChar(255)
+  avatar                String?    @db.Text
+  bio                   String?    @db.Text
+  isPrivate             Boolean    @default(false)
+  isVerified            Boolean    @default(false)
+  isOnline              Boolean    @default(false)
+  lastSeen              DateTime?
+  lastActive            DateTime   @default(now())
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  // Relations
+  messages              Message[]
+  sentConversations     Conversation[] @relation("user1")
+  receivedConversations Conversation[] @relation("user2")
+  groupMemberships      GroupMember[]
+  createdGroups         Group[]    @relation("GroupCreator")
+  friendships           Friendship[] @relation("initiator")
+  friendshipRequests    Friendship[] @relation("receiver")
+  settings              UserSettings?
+  notifications         Notification[]
+  typingStatuses        TypingStatus[]
+  reactions             Reaction[]
+  attachments           Attachment[]  @relation("attachmentAuthor")
+  sessionTokens         SessionToken[]
+  blockedUsers          BlockedUser[] @relation("blocker")
+  blockedByUsers        BlockedUser[] @relation("blocked")
+
+  @@index([email])
+  @@index([username])
+  @@index([isOnline])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// SESSION TOKEN MODEL - Track active sessions
+// ============================================================================
+model SessionToken {
+  id           String   @id @default(cuid())
+  userId       String   @db.Text
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique @db.Text
+  deviceName   String?  @db.VarChar(100)
+  ipAddress    String?  @db.VarChar(45)
+  userAgent    String?  @db.Text
+  lastUsedAt   DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+// BLOCKED USERS MODEL - Block/unblock users
+// ============================================================================
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String   @db.Text
+  blocker   User     @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String   @db.Text
+  blocked   User     @relation("blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+// ============================================================================
+// FRIENDSHIP MODEL - Friend requests and friend lists
+// ============================================================================
+model Friendship {
+  id         String   @id @default(cuid())
+  initiatorId String  @db.Text
+  initiator  User     @relation("initiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiverId String   @db.Text
+  receiver   User     @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     String   @default("pending") @db.VarChar(20)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([initiatorId, receiverId])
+  @@index([initiatorId])
+  @@index([receiverId])
+  @@index([status])
+}
+
+// ============================================================================
+// CONVERSATION MODEL - 1:1 direct messages between users
+// ============================================================================
+model Conversation {
+  id            String   @id @default(cuid())
+  user1Id       String   @db.Text
+  user1         User     @relation("user1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2Id       String   @db.Text
+  user2         User     @relation("user2", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages      Message[]
+  lastMessage   String?  @db.Text
+  lastMessageAt DateTime?
+  lastMessageBy String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([user1Id, user2Id])
+  @@index([user1Id])
+  @@index([user2Id])
+  @@index([lastMessageAt])
+  @@index([updatedAt])
+}
+
+// ============================================================================
+// GROUP MODEL - Group chats with multiple members
+// ============================================================================
+model Group {
+  id             String        @id @default(cuid())
+  name           String        @db.VarChar(100)
+  description    String?       @db.Text
+  avatar         String?       @db.Text
+  createdById    String        @db.Text
+  createdBy      User          @relation("GroupCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  members        GroupMember[]
+  messages       Message[]     @relation("GroupMessages")
+  isPublic       Boolean       @default(false)
+  pinnedMessage  String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([createdById])
+  @@index([isPublic])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// GROUP MEMBER MODEL - Membership roles in groups
+// ============================================================================
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String   @db.Text
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId    String   @db.Text
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   @default("member") @db.VarChar(20)
+  joinedAt  DateTime @default(now())
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+}
+
+// ============================================================================
+// MESSAGE MODEL - Chat messages with full feature support
+// ============================================================================
+model Message {
+  id                String     @id @default(cuid())
+  content           String     @db.Text
+  senderId          String     @db.Text
+  sender            User       @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  conversationId    String?    @db.Text
+  conversation      Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  groupId           String?    @db.Text
+  group             Group?     @relation("GroupMessages", fields: [groupId], references: [id], onDelete: Cascade)
+  replyToId         String?    @db.Text
+  replyTo           Message?   @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies           Message[]  @relation("MessageReplies")
+  reactions         Reaction[]
+  attachments       Attachment[] @relation("messageAttachments")
+  isPinned          Boolean    @default(false)
+  pinnedBy          String?    @db.Text
+  pinnedAt          DateTime?
+  isEdited          Boolean    @default(false)
+  editedAt          DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([senderId])
+  @@index([conversationId])
+  @@index([groupId])
+  @@index([replyToId])
+  @@index([createdAt])
+  @@index([isPinned])
+}
+
+// ============================================================================
+// REACTION MODEL - Emoji reactions to messages
+// ============================================================================
+model Reaction {
+  id        String   @id @default(cuid())
+  messageId String   @db.Text
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String   @db.Text
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String   @db.VarChar(10)
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+// ============================================================================
+// ATTACHMENT MODEL - Images, videos, files in messages
+// ============================================================================
+model Attachment {
+  id          String   @id @default(cuid())
+  messageId   String?  @db.Text
+  message     Message? @relation("messageAttachments", fields: [messageId], references: [id], onDelete: Cascade)
+  uploadedBy  String   @db.Text
+  author      User     @relation("attachmentAuthor", fields: [uploadedBy], references: [id], onDelete: Cascade)
+  fileName    String   @db.VarChar(255)
+  fileSize    BigInt
+  fileType    String   @db.VarChar(100)
+  fileUrl     String   @db.Text
+  thumbnailUrl String? @db.Text
+  mimeType    String   @db.VarChar(100)
+  createdAt   DateTime @default(now())
+
+  @@index([messageId])
+  @@index([uploadedBy])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// TYPING STATUS MODEL - Show who is typing
+// ============================================================================
+model TypingStatus {
+  id            String   @id @default(cuid())
+  userId        String   @db.Text
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String?  @db.Text
+  groupId       String?  @db.Text
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([userId])
+  @@index([conversationId])
+  @@index([groupId])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+// NOTIFICATION MODEL - User notifications
+// ============================================================================
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @db.Text
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   @db.VarChar(50)
+  title     String   @db.VarChar(255)
+  content   String?  @db.Text
+  link      String?  @db.Text
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// USER SETTINGS MODEL - User preferences and settings
+// ============================================================================
+model UserSettings {
+  id                    String  @id @default(cuid())
+  userId                String  @unique @db.Text
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationsEnabled  Boolean @default(true)
+  soundEnabled          Boolean @default(true)
+  theme                 String  @default("dark") @db.VarChar(20)
+  language              String  @default("en") @db.VarChar(10)
+  twoFactorEnabled      Boolean @default(false)
+  showOnlineStatus      Boolean @default(true)
+  showReadReceipts      Boolean @default(true)
+  allowUnknownMessages  Boolean @default(false)
+  blockList             String[]  @default([])
+  muteList              String[]  @default([])
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId])
+}
