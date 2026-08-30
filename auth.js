@@ -1,10 +1,10 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../server.js';
-import { hashPassword, verifyPassword } from '../utils/passwords.js';
-import { generateToken } from '../utils/jwt.js';
-import { validateSignup, validateLogin } from '../middleware/validation.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { prisma } from './server.js';
+import { hashPassword, verifyPassword } from './passwords.js';
+import { generateToken } from './jwt.js';
+import { validateSignup, validateLogin } from './validation.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
