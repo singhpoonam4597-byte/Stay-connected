@@ -3,7 +3,7 @@ import {
   validateUsername,
   validatePassword,
   validateDisplayName
-} from '../utils/validators.js';
+} from './utils/validators.js';
 
 export const validateSignup = (req, res, next) => {
   try {
