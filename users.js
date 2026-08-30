@@ -1,8 +1,43 @@
 import express from 'express';
 import { prisma } from './server.js';
-import { authenticateToken, checkNotBlocked, requireFriendship } from './jwt.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
+
+// ============================================================================
+// MIDDLEWARE: CHECK IF BLOCKED
+// ============================================================================
+const checkNotBlocked = async (req, res, next) => {
+  try {
+    // Safely get the ID depending on how the token was decoded
+    const currentUserId = req.user?.id || req.userId;
+    const { userId } = req.params;
+
+    if (!currentUserId || !userId || currentUserId === userId) {
+      return next();
+    }
+
+    const blockExists = await prisma.blockedUser.findFirst({
+      where: {
+        OR: [
+          { blockerId: currentUserId, blockedId: userId },
+          { blockerId: userId, blockedId: currentUserId }
+        ]
+      }
+    });
+
+    if (blockExists) {
+      return res.status(403).json({
+        error: 'You cannot access this profile',
+        code: 'USER_BLOCKED'
+      });
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
 
 // ============================================================================
 // GET USER PROFILE ENDPOINT
@@ -11,7 +46,7 @@ const router = express.Router();
 router.get('/:userId', authenticateToken, checkNotBlocked, async (req, res) => {
   try {
     const { userId } = req.params;
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -106,7 +141,7 @@ router.get('/:userId', authenticateToken, checkNotBlocked, async (req, res) => {
 
 router.patch('/me/profile', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { displayName, bio, isPrivate } = req.body;
 
     const updateData = {};
@@ -173,7 +208,7 @@ router.patch('/me/profile', authenticateToken, async (req, res) => {
 router.get('/search/query', authenticateToken, async (req, res) => {
   try {
     const { q, limit = 20 } = req.query;
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
 
     if (!q || q.trim().length === 0) {
       return res.status(400).json({
@@ -298,7 +333,7 @@ router.get('/:userId/stats', authenticateToken, async (req, res) => {
 
 router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     if (currentUserId === userId) {
@@ -377,7 +412,7 @@ router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
 
 router.post('/:userId/accept-friend', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     const friendship = await prisma.friendship.findFirst({
@@ -432,7 +467,7 @@ router.post('/:userId/accept-friend', authenticateToken, async (req, res) => {
 
 router.delete('/:userId/reject-friend', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     const friendship = await prisma.friendship.findFirst({
@@ -475,7 +510,7 @@ router.delete('/:userId/reject-friend', authenticateToken, async (req, res) => {
 
 router.delete('/:userId/friend', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     const friendship = await prisma.friendship.findFirst({
@@ -518,7 +553,7 @@ router.delete('/:userId/friend', authenticateToken, async (req, res) => {
 
 router.post('/:userId/block', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     if (currentUserId === userId) {
@@ -590,7 +625,7 @@ router.post('/:userId/block', authenticateToken, async (req, res) => {
 
 router.delete('/:userId/block', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { userId } = req.params;
 
     const blocked = await prisma.blockedUser.findFirst({
@@ -631,7 +666,7 @@ router.delete('/:userId/block', authenticateToken, async (req, res) => {
 
 router.get('/me/blocked', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
 
     const blockedUsers = await prisma.blockedUser.findMany({
       where: { blockerId: currentUserId },
