@@ -1,6 +1,6 @@
 import express from 'express';
 import { prisma } from './server.js';
-import { authenticateToken, requireConversationAccess, requireGroupMembership } from './jwt.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
@@ -10,7 +10,7 @@ const router = express.Router();
 
 router.post('/conversation', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { conversationId, content, replyToId } = req.body;
 
     if (!conversationId) {
@@ -124,7 +124,7 @@ router.post('/conversation', authenticateToken, async (req, res) => {
 
 router.post('/group', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { groupId, content, replyToId } = req.body;
 
     if (!groupId) {
@@ -239,7 +239,7 @@ router.post('/group', authenticateToken, async (req, res) => {
 
 router.patch('/:messageId', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
     const { content } = req.body;
 
@@ -316,7 +316,7 @@ router.patch('/:messageId', authenticateToken, async (req, res) => {
 
 router.delete('/:messageId', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
 
     const message = await prisma.message.findUnique({
@@ -361,7 +361,7 @@ router.delete('/:messageId', authenticateToken, async (req, res) => {
 
 router.post('/:messageId/react', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
     const { emoji } = req.body;
 
@@ -441,7 +441,7 @@ router.post('/:messageId/react', authenticateToken, async (req, res) => {
 
 router.delete('/:messageId/react/:emoji', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId, emoji } = req.params;
 
     const reaction = await prisma.reaction.findUnique({
@@ -504,7 +504,7 @@ router.delete('/:messageId/react/:emoji', authenticateToken, async (req, res) =>
 
 router.post('/:messageId/pin', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
 
     const message = await prisma.message.findUnique({
@@ -562,7 +562,7 @@ router.post('/:messageId/pin', authenticateToken, async (req, res) => {
 
 router.delete('/:messageId/pin', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
 
     const message = await prisma.message.findUnique({
