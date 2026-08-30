@@ -1,4 +1,4 @@
-import { prisma } from '../server.js';
+import { prisma } from './server.js';
 
 export const initChatHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
