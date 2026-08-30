@@ -40,3 +40,31 @@ export function decodeToken(token) {
     throw new Error('Token decode failed');
   }
 }
+
+export const authenticateToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    // Format is usually "Bearer <token>"
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ 
+        error: 'Access denied. No token provided.',
+        code: 'MISSING_TOKEN'
+      });
+    }
+
+    // This uses the verifyToken function you already wrote!
+    const decoded = verifyToken(token);
+    
+    // Attach the user payload to the request object so routes can use it
+    req.user = decoded; 
+    
+    next();
+  } catch (error) {
+    return res.status(403).json({ 
+      error: error.message,
+      code: 'INVALID_TOKEN'
+    });
+  }
+};
