@@ -1,8 +1,48 @@
 import express from 'express';
 import { prisma } from './server.js';
-import { authenticateToken, requireConversationAccess } from './jwt.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
+
+// ============================================================================
+// MIDDLEWARE: CHECK CONVERSATION ACCESS
+// ============================================================================
+const requireConversationAccess = async (req, res, next) => {
+  try {
+    const userId = req.user?.id || req.userId;
+    const { conversationId } = req.params;
+
+    if (!conversationId) {
+      return res.status(400).json({
+        error: 'Conversation ID is required',
+        code: 'MISSING_CONVERSATION_ID'
+      });
+    }
+
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { user1Id: true, user2Id: true }
+    });
+
+    if (!conversation) {
+      return res.status(404).json({
+        error: 'Conversation not found',
+        code: 'NOT_FOUND'
+      });
+    }
+
+    if (conversation.user1Id !== userId && conversation.user2Id !== userId) {
+      return res.status(403).json({
+        error: 'You do not have access to this conversation',
+        code: 'NO_ACCESS'
+      });
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
 
 // ============================================================================
 // CREATE/GET CONVERSATION ENDPOINT
@@ -10,7 +50,7 @@ const router = express.Router();
 
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { otherUserId } = req.body;
 
     if (!otherUserId) {
@@ -103,7 +143,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const currentUserId = req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { limit = 50, offset = 0 } = req.query;
 
     const conversations = await prisma.conversation.findMany({
