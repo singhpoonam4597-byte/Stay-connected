@@ -1,8 +1,72 @@
 import express from 'express';
 import { prisma } from './server.js';
-import { authenticateToken, requireGroupMembership, requireGroupAdmin } from './jwt.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
+
+// ============================================================================
+// MIDDLEWARE: CHECK GROUP MEMBERSHIP
+// ============================================================================
+const requireGroupMembership = async (req, res, next) => {
+  try {
+    const userId = req.user?.id || req.userId;
+    const { groupId } = req.params;
+
+    if (!groupId) {
+      return res.status(400).json({
+        error: 'Group ID is required',
+        code: 'MISSING_GROUP_ID'
+      });
+    }
+
+    const member = await prisma.groupMember.findFirst({
+      where: { groupId, userId }
+    });
+
+    if (!member) {
+      return res.status(403).json({
+        error: 'You do not have access to this group',
+        code: 'NO_ACCESS'
+      });
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================================
+// MIDDLEWARE: CHECK GROUP ADMIN ACCESS
+// ============================================================================
+const requireGroupAdmin = async (req, res, next) => {
+  try {
+    const userId = req.user?.id || req.userId;
+    const { groupId } = req.params;
+
+    if (!groupId) {
+      return res.status(400).json({
+        error: 'Group ID is required',
+        code: 'MISSING_GROUP_ID'
+      });
+    }
+
+    const member = await prisma.groupMember.findFirst({
+      where: { groupId, userId }
+    });
+
+    if (!member || !['admin', 'owner'].includes(member.role)) {
+      return res.status(403).json({
+        error: 'You do not have admin permissions for this group',
+        code: 'NOT_AUTHORIZED'
+      });
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
 
 // ============================================================================
 // CREATE GROUP ENDPOINT
@@ -10,7 +74,7 @@ const router = express.Router();
 
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { name, description, isPublic = false, memberIds = [] } = req.body;
 
     if (!name || name.trim().length === 0) {
@@ -102,7 +166,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { limit = 50, offset = 0 } = req.query;
 
     const groups = await prisma.group.findMany({
@@ -310,7 +374,7 @@ router.patch('/:groupId', authenticateToken, requireGroupAdmin, async (req, res)
 
 router.delete('/:groupId', authenticateToken, requireGroupAdmin, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { groupId } = req.params;
 
     const group = await prisma.group.findUnique({
@@ -595,7 +659,7 @@ router.get('/:groupId/messages', authenticateToken, requireGroupMembership, asyn
 
 router.post('/:groupId/leave', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.user?.id || req.userId;
     const { groupId } = req.params;
 
     const member = await prisma.groupMember.findFirst({
