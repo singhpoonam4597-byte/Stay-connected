@@ -7,22 +7,27 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
 
+// ============================================================================
+// UPDATED IMPORT PATHS (Removed folder names)
+// ============================================================================
+
 // Import route handlers
-import authRoutes from './routes/auth.js';
-import userRoutes from './routes/users.js';
-import messageRoutes from './routes/messages.js';
-import conversationRoutes from './routes/conversations.js';
-import groupRoutes from './routes/groups.js';
-import uploadRoutes from './routes/upload.js';
-import settingsRoutes from './routes/settings.js';
+import authRoutes from './auth.js';
+import userRoutes from './users.js'; 
+import messageRoutes from './messages.js';
+import conversationRoutes from './conversations.js';
+import groupRoutes from './groups.js';
+import uploadRoutes from './upload.js'; 
+import settingsRoutes from './settings.js'; 
 
 // Import middleware
-import { authenticateToken } from './middleware/auth.js';
-import { errorHandler } from './middleware/errorHandler.js';
+// Assuming authenticateToken is in your jwt.js file based on your GitHub screenshot
+import { authenticateToken } from './jwt.js'; 
+import { errorHandler } from './errorHandler.js';
 
 // Import socket handlers
-import { initChatHandler } from './sockets/chatHandler.js';
-import { initPresenceHandler } from './sockets/presenceHandler.js';
+import { initChatHandler } from './chatHandler.js';
+import { initPresenceHandler } from './presenceHandler.js';
 
 dotenv.config();
 
