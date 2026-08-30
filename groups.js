@@ -1,6 +1,6 @@
 import express from 'express';
-import { prisma } from '../server.js';
-import { authenticateToken, requireGroupMembership, requireGroupAdmin } from '../middleware/auth.js';
+import { prisma } from './server.js';
+import { authenticateToken, requireGroupMembership, requireGroupAdmin } from './jwt.js';
 
 const router = express.Router();
 
