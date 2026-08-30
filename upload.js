@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { prisma } from '../server.js';
+import { prisma } from './server.js';
 
 const router = express.Router();
 
