@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Connect - Real-time messaging app backend",
   "type": "module",
-  "main": "src/server.js",
+  "main": "server.js",
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
+    "dev": "node --watch server.js",
+    "start": "node server.js",
     "build": "echo 'No build required for Node.js'",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
