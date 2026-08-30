@@ -1,4 +1,4 @@
-import { prisma } from '../server.js';
+import { prisma } from './server.js';
 
 export const initPresenceHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
