@@ -1,6 +1,6 @@
 import express from 'express';
-import { prisma } from '../server.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { prisma } from './server.js';
+import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
