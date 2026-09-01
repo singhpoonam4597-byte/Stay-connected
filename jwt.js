@@ -8,6 +8,7 @@ export function generateToken(user) {
     const token = jwt.sign(
       {
         id: user.id,
+        userId: user.id,
         email: user.email,
         username: user.username
       },
@@ -44,7 +45,6 @@ export function decodeToken(token) {
 export const authenticateToken = (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
-    // Format is usually "Bearer <token>"
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
@@ -54,11 +54,10 @@ export const authenticateToken = (req, res, next) => {
       });
     }
 
-    // This uses the verifyToken function you already wrote!
     const decoded = verifyToken(token);
     
-    // Attach the user payload to the request object so routes can use it
     req.user = decoded; 
+    req.userId = decoded.userId || decoded.id; // Sets req.userId so auth.js routes find the user
     
     next();
   } catch (error) {
