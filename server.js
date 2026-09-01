@@ -1,267 +1,81 @@
 import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
-import { createServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
-import rateLimit from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
 
-// ============================================================================
-// UPDATED IMPORT PATHS (Removed folder names)
-// ============================================================================
-
-// Import route handlers
 import authRoutes from './auth.js';
-import userRoutes from './users.js'; 
-import messageRoutes from './messages.js';
-import conversationRoutes from './conversations.js';
-import groupRoutes from './groups.js';
-import uploadRoutes from './upload.js'; 
-import settingsRoutes from './settings.js'; 
-
-// Import middleware
-// Assuming authenticateToken is in your jwt.js file based on your GitHub screenshot
-import { authenticateToken } from './jwt.js'; 
-import { errorHandler } from './errorHandler.js';
-
-// Import socket handlers
-import { initChatHandler } from './chatHandler.js';
-import { initPresenceHandler } from './presenceHandler.js';
 
 dotenv.config();
 
-// Initialize Express and HTTP server
+// Export Prisma client for use across route modules
+export const prisma = new PrismaClient();
+
 const app = express();
-const httpServer = createServer(app);
 
-// Initialize Socket.io
-const io = new SocketIOServer(httpServer, {
-  cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE']
-  },
-  path: process.env.SOCKET_PATH || '/socket.io',
-  transports: ['websocket', 'polling'],
-  pingInterval: 25000,
-  pingTimeout: 60000
-});
+// Trust reverse proxy headers (required for Railway, Vercel, Heroku, etc.)
+app.set('trust proxy', 1);
 
-// Initialize Prisma client
-export const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error']
-});
-
-// ============================================================================
-// MIDDLEWARE SETUP
-// ============================================================================
-
-// Security middleware
+// Middleware configuration
 app.use(helmet());
-
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
-
-// CORS middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 200
+  origin: process.env.FRONTEND_URL || '*',
+  credentials: true
 }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging middleware (development only)
-if (process.env.NODE_ENV === 'development') {
-  app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    next();
-  });
-}
-
-// ============================================================================
-// RATE LIMITING
-// ============================================================================
-
-const generalLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
-  message: 'Too many requests from this IP, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: 'Too many authentication attempts, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => process.env.NODE_ENV === 'development'
-});
-
-const uploadLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 50,
-  message: 'Too many file uploads, please try again later.',
-});
-
-// Apply rate limiters
-app.use('/api/', generalLimiter);
-
-// ============================================================================
-// ROUTES
-// ============================================================================
+// API Routes
+app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    uptime: process.uptime()
+  res.status(200).json({ status: 'OK', timestamp: new Date() });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ message: 'Connect Backend API Server is running' });
+});
+
+// Global error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled Server Error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    code: 'SERVER_ERROR'
   });
 });
 
-// Authentication routes (with auth limiter)
-app.use('/api/auth/login', authLimiter);
-app.use('/api/auth/signup', authLimiter);
-app.use('/api/auth', authRoutes);
+const PORT = process.env.PORT || 8080;
+const httpServer = createServer(app);
 
-// Protected routes (require authentication)
-app.use('/api/users', authenticateToken, userRoutes);
-app.use('/api/messages', authenticateToken, messageRoutes);
-app.use('/api/conversations', authenticateToken, conversationRoutes);
-app.use('/api/groups', authenticateToken, groupRoutes);
-app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
-app.use('/api/settings', authenticateToken, settingsRoutes);
-
-// ============================================================================
-// SOCKET.IO SETUP
-// ============================================================================
-
-// Middleware to authenticate socket connections
-io.use(async (socket, next) => {
-  try {
-    const token = socket.handshake.auth.token;
-    if (!token) {
-      return next(new Error('Authentication error'));
-    }
-
-    const decoded = await verifySocketToken(token);
-    if (!decoded) {
-      return next(new Error('Invalid token'));
-    }
-
-    socket.userId = decoded.id;
-    socket.userEmail = decoded.email;
-    socket.username = decoded.username;
-    next();
-  } catch (error) {
-    next(new Error('Authentication error'));
+// Socket.io initialization
+export const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL || '*',
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
-// Initialize socket event handlers
-initChatHandler(io, prisma);
-initPresenceHandler(io, prisma);
-
-// Socket connection logging
 io.on('connection', (socket) => {
-  console.log(`✅ User connected: ${socket.userId} (Socket: ${socket.id})`);
-  
+  console.log(`Socket connected: ${socket.id}`);
+
   socket.on('disconnect', () => {
-    console.log(`❌ User disconnected: ${socket.userId} (Socket: ${socket.id})`);
+    console.log(`Socket disconnected: ${socket.id}`);
   });
 });
 
-// ============================================================================
-// ERROR HANDLING
-// ============================================================================
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Route not found',
-    path: req.path,
-    method: req.method
-  });
-});
-
-// Global error handler (must be last)
-app.use(errorHandler);
-
-// ============================================================================
-// SERVER STARTUP
-// ============================================================================
-
-const PORT = parseInt(process.env.PORT || '3000');
-const HOST = '0.0.0.0';
-
-httpServer.listen(PORT, HOST, () => {
-  console.log('\n' + '='.repeat(60));
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log('==================================================');
   console.log('🚀 CHAT APP SERVER STARTED');
-  console.log('='.repeat(60));
-  console.log(`📡 Server running on ${HOST}:${PORT}`);
-  console.log(`🌍 Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`🗄️  Database: ${process.env.DATABASE_URL?.substring(0, 30)}...`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV}`);
-  console.log('='.repeat(60) + '\n');
+  console.log('==================================================');
+  console.log(`📡 Server running on 0.0.0.0:${PORT}`);
+  console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'https://connect-sepia-seven.vercel.app'}`);
+  console.log(`🗄️ Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not configured'}`);
+  console.log(`⚙️ Environment: ${process.env.NODE_ENV || 'production'}`);
+  console.log('==================================================');
 });
-
-// ============================================================================
-// GRACEFUL SHUTDOWN
-// ============================================================================
-
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  
-  httpServer.close(async () => {
-    console.log('🔌 HTTP server closed');
-    await prisma.$disconnect();
-    console.log('💾 Prisma disconnected');
-    process.exit(0);
-  });
-
-  setTimeout(() => {
-    console.error('❌ Forced shutdown after 10s');
-    process.exit(1);
-  }, 10000);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 SIGTERM received, shutting down...');
-  
-  httpServer.close(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
-  });
-});
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-async function verifySocketToken(token) {
-  try {
-    const jwt = await import('jsonwebtoken');
-    return jwt.default.verify(token, process.env.JWT_SECRET);
-  } catch (error) {
-    return null;
-  }
-}
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  process.exit(1);
-});
-
-export { app, httpServer, io };
