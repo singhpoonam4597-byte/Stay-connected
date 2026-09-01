@@ -67,6 +67,11 @@ router.post('/signup', validateSignup, async (req, res) => {
 
     const token = generateToken(user);
 
+    // Delete any conflicting session token before creating a new one
+    await prisma.sessionToken.deleteMany({
+      where: { token }
+    });
+
     const sessionToken = await prisma.sessionToken.create({
       data: {
         userId: user.id,
@@ -140,6 +145,16 @@ router.post('/login', validateLogin, async (req, res) => {
       data: {
         isOnline: true,
         lastActive: new Date()
+      }
+    });
+
+    // Clear existing session token records to prevent P2002 unique constraint failure
+    await prisma.sessionToken.deleteMany({
+      where: {
+        OR: [
+          { token },
+          { userId: user.id }
+        ]
       }
     });
 
@@ -301,14 +316,14 @@ router.post('/refresh', authenticateToken, async (req, res) => {
     const oldAuthHeader = req.headers['authorization'];
     const oldToken = oldAuthHeader && oldAuthHeader.split(' ')[1];
 
-    if (oldToken) {
-      await prisma.sessionToken.deleteMany({
-        where: {
-          userId,
-          token: oldToken
-        }
-      });
-    }
+    await prisma.sessionToken.deleteMany({
+      where: {
+        OR: [
+          { token: newToken },
+          { userId, token: oldToken }
+        ]
+      }
+    });
 
     await prisma.sessionToken.create({
       data: {
