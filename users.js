@@ -1,10 +1,38 @@
 import express from 'express';
 import { prisma } from './server.js';
-import { authenticateToken, checkNotBlocked, requireFriendship } from './auth.js';
 
 const router = express.Router();
 
-router.get('/search', authenticateToken, async (req, res) => {
+// Auth already applied in server.js — no second authenticateToken needed.
+// Inline block check (auth.js does not export middleware).
+async function checkNotBlocked(req, res, next) {
+  try {
+    const userId = req.userId;
+    const targetUserId = req.params.userId;
+    if (!targetUserId || targetUserId === userId) return next();
+
+    const blocked = await prisma.blockedUser.findFirst({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: targetUserId },
+          { blockerId: targetUserId, blockedId: userId },
+        ],
+      },
+    });
+
+    if (blocked) {
+      return res.status(403).json({
+        error: 'You cannot perform this action with this user',
+        code: 'USER_BLOCKED',
+      });
+    }
+    next();
+  } catch (error) {
+    return res.status(500).json({ error: 'Database error', code: 'DB_ERROR' });
+  }
+}
+
+router.get('/search', async (req, res) => {
   try {
     const { q, limit = 20 } = req.query;
     const currentUserId = req.userId;
@@ -54,7 +82,83 @@ router.get('/search', authenticateToken, async (req, res) => {
   }
 });
 
-router.get('/:userId', authenticateToken, checkNotBlocked, async (req, res) => {
+router.get('/me/blocked', async (req, res) => {
+  try {
+    const blockedUsers = await prisma.blockedUser.findMany({
+      where: { blockerId: req.userId },
+      include: {
+        blocked: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+            isVerified: true,
+            isOnline: true,
+          },
+        },
+      },
+    });
+    res.status(200).json({
+      success: true,
+      data: {
+        blockedUsers: blockedUsers.map((b) => ({
+          blockId: b.id,
+          user: b.blocked,
+          blockedAt: b.createdAt,
+        })),
+        count: blockedUsers.length,
+      },
+    });
+  } catch (error) {
+    console.error('Get blocked users error:', error);
+    res.status(500).json({ error: 'Failed to fetch blocked users' });
+  }
+});
+
+router.patch('/me/profile', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { displayName, bio, isPrivate } = req.body;
+    const updateData = {};
+
+    if (displayName !== undefined) {
+      if (displayName.length > 100) {
+        return res.status(400).json({ error: 'Display name must be less than 100 characters' });
+      }
+      updateData.displayName = displayName;
+    }
+    if (bio !== undefined) {
+      if (bio.length > 500) {
+        return res.status(400).json({ error: 'Bio must be less than 500 characters' });
+      }
+      updateData.bio = bio;
+    }
+    if (isPrivate !== undefined) updateData.isPrivate = isPrivate;
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        username: true,
+        displayName: true,
+        avatar: true,
+        bio: true,
+        isPrivate: true,
+        isVerified: true,
+        createdAt: true,
+      },
+    });
+
+    res.status(200).json({ success: true, data: { user: updatedUser } });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile', code: 'UPDATE_ERROR' });
+  }
+});
+
+router.get('/:userId', checkNotBlocked, async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.userId;
@@ -113,49 +217,7 @@ router.get('/:userId', authenticateToken, checkNotBlocked, async (req, res) => {
   }
 });
 
-router.patch('/me/profile', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.userId;
-    const { displayName, bio, isPrivate } = req.body;
-    const updateData = {};
-
-    if (displayName !== undefined) {
-      if (displayName.length > 100) {
-        return res.status(400).json({ error: 'Display name must be less than 100 characters' });
-      }
-      updateData.displayName = displayName;
-    }
-    if (bio !== undefined) {
-      if (bio.length > 500) {
-        return res.status(400).json({ error: 'Bio must be less than 500 characters' });
-      }
-      updateData.bio = bio;
-    }
-    if (isPrivate !== undefined) updateData.isPrivate = isPrivate;
-
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: {
-        id: true,
-        username: true,
-        displayName: true,
-        avatar: true,
-        bio: true,
-        isPrivate: true,
-        isVerified: true,
-        createdAt: true,
-      },
-    });
-
-    res.status(200).json({ success: true, data: { user: updatedUser } });
-  } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ error: 'Failed to update profile', code: 'UPDATE_ERROR' });
-  }
-});
-
-router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
+router.post('/:userId/friend-request', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -174,7 +236,10 @@ router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
       },
     });
     if (existing) {
-      return res.status(409).json({ error: 'Friendship request already exists', data: { status: existing.status } });
+      return res.status(409).json({
+        error: 'Friendship request already exists',
+        data: { status: existing.status },
+      });
     }
 
     const friendship = await prisma.friendship.create({
@@ -191,7 +256,9 @@ router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
           link: `/user/${currentUserId}`,
         },
       });
-    } catch { /* optional */ }
+    } catch {
+      /* optional */
+    }
 
     res.status(201).json({ success: true, data: { friendship } });
   } catch (error) {
@@ -200,7 +267,7 @@ router.post('/:userId/friend-request', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/:userId/accept-friend', authenticateToken, async (req, res) => {
+router.post('/:userId/accept-friend', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -220,7 +287,7 @@ router.post('/:userId/accept-friend', authenticateToken, async (req, res) => {
   }
 });
 
-router.delete('/:userId/reject-friend', authenticateToken, async (req, res) => {
+router.delete('/:userId/reject-friend', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -241,7 +308,7 @@ router.delete('/:userId/reject-friend', authenticateToken, async (req, res) => {
   }
 });
 
-router.delete('/:userId/friend', authenticateToken, async (req, res) => {
+router.delete('/:userId/friend', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -262,7 +329,7 @@ router.delete('/:userId/friend', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/:userId/block', authenticateToken, async (req, res) => {
+router.post('/:userId/block', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -294,7 +361,7 @@ router.post('/:userId/block', authenticateToken, async (req, res) => {
   }
 });
 
-router.delete('/:userId/block', authenticateToken, async (req, res) => {
+router.delete('/:userId/block', async (req, res) => {
   try {
     const currentUserId = req.userId;
     const { userId } = req.params;
@@ -307,40 +374,6 @@ router.delete('/:userId/block', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Unblock user error:', error);
     res.status(500).json({ error: 'Failed to unblock user' });
-  }
-});
-
-router.get('/me/blocked', authenticateToken, async (req, res) => {
-  try {
-    const blockedUsers = await prisma.blockedUser.findMany({
-      where: { blockerId: req.userId },
-      include: {
-        blocked: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatar: true,
-            isVerified: true,
-            isOnline: true,
-          },
-        },
-      },
-    });
-    res.status(200).json({
-      success: true,
-      data: {
-        blockedUsers: blockedUsers.map((b) => ({
-          blockId: b.id,
-          user: b.blocked,
-          blockedAt: b.createdAt,
-        })),
-        count: blockedUsers.length,
-      },
-    });
-  } catch (error) {
-    console.error('Get blocked users error:', error);
-    res.status(500).json({ error: 'Failed to fetch blocked users' });
   }
 });
 
