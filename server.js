@@ -8,7 +8,6 @@ import rateLimit from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 
-// Root-level modules (no routes/ middleware/ sockets/ folders)
 import authRoutes from './authRoutes.js';
 import userRoutes from './users.js';
 import messageRoutes from './messages.js';
@@ -16,7 +15,7 @@ import conversationRoutes from './conversations.js';
 import groupRoutes from './groups.js';
 import uploadRoutes from './upload.js';
 import settingsRoutes from './settings.js';
-import { authenticateToken } from './auth.js';
+import { authenticateToken } from './jwt.js';
 import { errorHandler } from './errorHandler.js';
 import { initChatHandler } from './chatHandler.js';
 import { initPresenceHandler } from './presenceHandler.js';
@@ -24,7 +23,7 @@ import { initPresenceHandler } from './presenceHandler.js';
 dotenv.config();
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-  console.error('❌ JWT_SECRET must be set and at least 32 characters');
+  console.error('JWT_SECRET must be set and at least 32 characters');
   process.exit(1);
 }
 
@@ -49,7 +48,6 @@ export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
-// —— Middleware ——
 app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -71,7 +69,6 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// —— Rate limits ——
 const generalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
@@ -97,7 +94,6 @@ const uploadLimiter = rateLimit({
 
 app.use('/api/', generalLimiter);
 
-// —— Health ——
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
@@ -107,12 +103,10 @@ app.get('/health', (req, res) => {
   });
 });
 
-// —— Auth (public + protected me/logout) ——
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
 
-// —— Protected API ——
 app.use('/api/users', authenticateToken, userRoutes);
 app.use('/api/messages', authenticateToken, messageRoutes);
 app.use('/api/conversations', authenticateToken, conversationRoutes);
@@ -120,7 +114,6 @@ app.use('/api/groups', authenticateToken, groupRoutes);
 app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 
-// —— Socket auth ——
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
@@ -140,13 +133,12 @@ initChatHandler(io, prisma);
 initPresenceHandler(io, prisma);
 
 io.on('connection', (socket) => {
-  console.log(`User connected: \( {socket.userId} ( \){socket.id})`);
+  console.log(`User connected: ${socket.userId} (${socket.id})`);
   socket.on('disconnect', () => {
-    console.log(`User disconnected: \( {socket.userId} ( \){socket.id})`);
+    console.log(`User disconnected: ${socket.userId} (${socket.id})`);
   });
 });
 
-// —— 404 + errors ——
 app.use((req, res) => {
   res.status(404).json({
     error: 'Route not found',
@@ -157,14 +149,13 @@ app.use((req, res) => {
 
 app.use(errorHandler);
 
-// —— Start ——
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
   console.log('='.repeat(50));
   console.log('Connect backend started');
-  console.log(`Listening on \( {HOST}: \){PORT}`);
+  console.log(`Listening on ${HOST}:${PORT}`);
   console.log(`FRONTEND_URL: ${FRONTEND_URL}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
   console.log('='.repeat(50));

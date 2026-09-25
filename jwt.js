@@ -36,3 +36,42 @@ export function verifyToken(token) {
 export function decodeToken(token) {
   return jwt.decode(token);
 }
+
+/** Express middleware — used by routes and server.js */
+export function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Access token required',
+        code: 'NO_TOKEN',
+      });
+    }
+
+    jwt.verify(token, getSecret(), (err, decoded) => {
+      if (err) {
+        if (err.name === 'TokenExpiredError') {
+          return res.status(401).json({
+            error: 'Token has expired',
+            code: 'TOKEN_EXPIRED',
+          });
+        }
+        return res.status(403).json({
+          error: 'Invalid or malformed token',
+          code: 'INVALID_TOKEN',
+        });
+      }
+
+      req.user = decoded;
+      req.userId = decoded.id;
+      next();
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Authentication error',
+      code: 'AUTH_ERROR',
+    });
+  }
+}
