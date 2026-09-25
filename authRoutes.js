@@ -2,8 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { prisma } from './server.js';
-import { generateToken, verifyToken } from './jwt.js';
-import { authenticateToken } from './auth.js';
+import { generateToken, authenticateToken } from './jwt.js';
 
 const router = Router();
 
@@ -30,13 +29,14 @@ function strongPassword(password) {
   return /[a-zA-Z]/.test(password) && /[0-9]/.test(password);
 }
 
-// POST /api/auth/signup
 router.post('/signup', async (req, res) => {
   try {
     const { email, username, displayName, password, confirmPassword } = req.body || {};
 
     if (!email?.trim() || !username?.trim() || !displayName?.trim() || !password) {
-      return res.status(400).json({ error: 'email, username, displayName and password are required' });
+      return res.status(400).json({
+        error: 'email, username, displayName and password are required',
+      });
     }
     if (confirmPassword != null && password !== confirmPassword) {
       return res.status(400).json({ error: 'Passwords do not match' });
@@ -65,12 +65,13 @@ router.post('/signup', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    // Schema field is `password` (stores the hash)
     const user = await prisma.user.create({
       data: {
         email: email.trim().toLowerCase(),
         username: username.trim().toLowerCase(),
         displayName: displayName.trim(),
-        passwordHash,
+        password: passwordHash,
       },
     });
 
@@ -78,17 +79,12 @@ router.post('/signup', async (req, res) => {
     const refreshToken = crypto.randomBytes(48).toString('hex');
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    // SessionToken model may or may not exist — ignore if missing
     try {
       await prisma.sessionToken.create({
-        data: {
-          token: refreshToken,
-          userId: user.id,
-          expiresAt,
-        },
+        data: { token: refreshToken, userId: user.id, expiresAt },
       });
     } catch {
-      /* optional table */
+      /* optional */
     }
 
     return res.status(201).json({
@@ -106,7 +102,6 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -117,11 +112,11 @@ router.post('/login', async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { email: email.trim().toLowerCase() },
     });
-    if (!user?.passwordHash) {
+    if (!user?.password) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    const ok = await bcrypt.compare(password, user.password);
     if (!ok) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
@@ -162,7 +157,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/auth/me
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
@@ -176,7 +170,6 @@ router.get('/me', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/refresh
 router.post('/refresh', async (req, res) => {
   try {
     const { refreshToken } = req.body || {};
@@ -213,7 +206,6 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// POST /api/auth/logout
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
     const { refreshToken } = req.body || {};

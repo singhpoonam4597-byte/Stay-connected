@@ -1,17 +1,11 @@
-import { prisma } from './server.js';
-
 export const initChatHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
     const userId = socket.userId;
 
-    // ========================================================================
-    // JOIN CONVERSATION
-    // ========================================================================
-
     socket.on('join:conversation', async (conversationId) => {
       try {
         const conversation = await prismaClient.conversation.findUnique({
-          where: { id: conversationId }
+          where: { id: conversationId },
         });
 
         if (!conversation) {
@@ -19,10 +13,7 @@ export const initChatHandler = (io, prismaClient) => {
           return;
         }
 
-        if (
-          conversation.user1Id !== userId &&
-          conversation.user2Id !== userId
-        ) {
+        if (conversation.user1Id !== userId && conversation.user2Id !== userId) {
           socket.emit('error', { message: 'No access to this conversation' });
           return;
         }
@@ -30,7 +21,7 @@ export const initChatHandler = (io, prismaClient) => {
         socket.join(`conversation:${conversationId}`);
         socket.emit('joined:conversation', {
           conversationId,
-          message: 'Joined conversation'
+          message: 'Joined conversation',
         });
       } catch (error) {
         console.error('Join conversation error:', error);
@@ -38,18 +29,10 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // ========================================================================
-    // LEAVE CONVERSATION
-    // ========================================================================
-
     socket.on('leave:conversation', (conversationId) => {
       socket.leave(`conversation:${conversationId}`);
       socket.emit('left:conversation', { conversationId });
     });
-
-    // ========================================================================
-    // SEND MESSAGE
-    // ========================================================================
 
     socket.on('send:message', async (data) => {
       try {
@@ -59,7 +42,6 @@ export const initChatHandler = (io, prismaClient) => {
           socket.emit('error', { message: 'Message content is required' });
           return;
         }
-
         if (content.length > 5000) {
           socket.emit('error', { message: 'Message is too long' });
           return;
@@ -69,10 +51,13 @@ export const initChatHandler = (io, prismaClient) => {
 
         if (conversationId) {
           const conversation = await prismaClient.conversation.findUnique({
-            where: { id: conversationId }
+            where: { id: conversationId },
           });
 
-          if (!conversation || (conversation.user1Id !== userId && conversation.user2Id !== userId)) {
+          if (
+            !conversation ||
+            (conversation.user1Id !== userId && conversation.user2Id !== userId)
+          ) {
             socket.emit('error', { message: 'No access to this conversation' });
             return;
           }
@@ -82,25 +67,21 @@ export const initChatHandler = (io, prismaClient) => {
               content: content.trim(),
               senderId: userId,
               conversationId,
-              replyToId: replyToId || null
+              replyToId: replyToId || null,
             },
             include: {
               sender: {
-                select: {
-                  id: true,
-                  username: true,
-                  displayName: true,
-                  avatar: true
-                }
+                select: { id: true, username: true, displayName: true, avatar: true },
               },
               replyTo: {
                 select: {
                   id: true,
                   content: true,
-                  sender: { select: { displayName: true } }
-                }
-              }
-            }
+                  isDeleted: true,
+                  sender: { select: { displayName: true } },
+                },
+              },
+            },
           });
 
           await prismaClient.conversation.update({
@@ -108,21 +89,21 @@ export const initChatHandler = (io, prismaClient) => {
             data: {
               lastMessage: content.substring(0, 100),
               lastMessageAt: new Date(),
-              lastMessageBy: userId
-            }
+              lastMessageBy: userId,
+            },
           });
 
           io.to(`conversation:${conversationId}`).emit('message:new', {
             message,
-            conversationId
+            conversationId,
           });
         } else if (groupId) {
           const group = await prismaClient.group.findUnique({
             where: { id: groupId },
-            include: { members: true }
+            include: { members: true },
           });
 
-          if (!group || !group.members.some(m => m.userId === userId)) {
+          if (!group || !group.members.some((m) => m.userId === userId)) {
             socket.emit('error', { message: 'No access to this group' });
             return;
           }
@@ -132,48 +113,42 @@ export const initChatHandler = (io, prismaClient) => {
               content: content.trim(),
               senderId: userId,
               groupId,
-              replyToId: replyToId || null
+              replyToId: replyToId || null,
             },
             include: {
               sender: {
-                select: {
-                  id: true,
-                  username: true,
-                  displayName: true,
-                  avatar: true
-                }
+                select: { id: true, username: true, displayName: true, avatar: true },
               },
               replyTo: {
                 select: {
                   id: true,
                   content: true,
-                  sender: { select: { displayName: true } }
-                }
-              }
-            }
+                  isDeleted: true,
+                  sender: { select: { displayName: true } },
+                },
+              },
+            },
           });
 
           await prismaClient.group.update({
             where: { id: groupId },
-            data: { updatedAt: new Date() }
+            data: { updatedAt: new Date() },
           });
 
           io.to(`group:${groupId}`).emit('message:new', {
             message,
-            groupId
+            groupId,
           });
         }
 
-        socket.emit('message:sent', { messageId: message.id });
+        if (message) {
+          socket.emit('message:sent', { messageId: message.id });
+        }
       } catch (error) {
         console.error('Send message error:', error);
         socket.emit('error', { message: 'Failed to send message' });
       }
     });
-
-    // ========================================================================
-    // EDIT MESSAGE
-    // ========================================================================
 
     socket.on('edit:message', async (data) => {
       try {
@@ -185,14 +160,13 @@ export const initChatHandler = (io, prismaClient) => {
         }
 
         const message = await prismaClient.message.findUnique({
-          where: { id: messageId }
+          where: { id: messageId },
         });
 
-        if (!message) {
+        if (!message || message.isDeleted) {
           socket.emit('error', { message: 'Message not found' });
           return;
         }
-
         if (message.senderId !== userId) {
           socket.emit('error', { message: 'You can only edit your own messages' });
           return;
@@ -203,18 +177,13 @@ export const initChatHandler = (io, prismaClient) => {
           data: {
             content: content.trim(),
             isEdited: true,
-            editedAt: new Date()
+            editedAt: new Date(),
           },
           include: {
             sender: {
-              select: {
-                id: true,
-                username: true,
-                displayName: true,
-                avatar: true
-              }
-            }
-          }
+              select: { id: true, username: true, displayName: true, avatar: true },
+            },
+          },
         });
 
         const roomId = message.conversationId
@@ -223,7 +192,7 @@ export const initChatHandler = (io, prismaClient) => {
 
         io.to(roomId).emit('message:edited', {
           message: updatedMessage,
-          messageId
+          messageId,
         });
       } catch (error) {
         console.error('Edit message error:', error);
@@ -231,30 +200,31 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // ========================================================================
-    // DELETE MESSAGE
-    // ========================================================================
-
+    // Soft-delete
     socket.on('delete:message', async (data) => {
       try {
         const { messageId } = data;
 
         const message = await prismaClient.message.findUnique({
-          where: { id: messageId }
+          where: { id: messageId },
         });
 
-        if (!message) {
+        if (!message || message.isDeleted) {
           socket.emit('error', { message: 'Message not found' });
           return;
         }
-
         if (message.senderId !== userId) {
           socket.emit('error', { message: 'You can only delete your own messages' });
           return;
         }
 
-        await prismaClient.message.delete({
-          where: { id: messageId }
+        await prismaClient.message.update({
+          where: { id: messageId },
+          data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            content: '',
+          },
         });
 
         const roomId = message.conversationId
@@ -268,10 +238,6 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // ========================================================================
-    // REACT TO MESSAGE
-    // ========================================================================
-
     socket.on('message:react', async (data) => {
       try {
         const { messageId, emoji } = data;
@@ -282,41 +248,29 @@ export const initChatHandler = (io, prismaClient) => {
         }
 
         const message = await prismaClient.message.findUnique({
-          where: { id: messageId }
+          where: { id: messageId },
         });
 
-        if (!message) {
+        if (!message || message.isDeleted) {
           socket.emit('error', { message: 'Message not found' });
           return;
         }
 
         const existingReaction = await prismaClient.reaction.findUnique({
           where: {
-            messageId_userId_emoji: {
-              messageId,
-              userId,
-              emoji
-            }
-          }
+            messageId_userId_emoji: { messageId, userId, emoji },
+          },
         });
 
         if (existingReaction) {
           await prismaClient.reaction.delete({
             where: {
-              messageId_userId_emoji: {
-                messageId,
-                userId,
-                emoji
-              }
-            }
+              messageId_userId_emoji: { messageId, userId, emoji },
+            },
           });
         } else {
           await prismaClient.reaction.create({
-            data: {
-              messageId,
-              userId,
-              emoji
-            }
+            data: { messageId, userId, emoji },
           });
         }
 
@@ -325,12 +279,10 @@ export const initChatHandler = (io, prismaClient) => {
           include: {
             reactions: {
               include: {
-                user: {
-                  select: { id: true, displayName: true }
-                }
-              }
-            }
-          }
+                user: { select: { id: true, displayName: true } },
+              },
+            },
+          },
         });
 
         const roomId = message.conversationId
@@ -339,7 +291,7 @@ export const initChatHandler = (io, prismaClient) => {
 
         io.to(roomId).emit('message:reaction', {
           message: updatedMessage,
-          messageId
+          messageId,
         });
       } catch (error) {
         console.error('React to message error:', error);
@@ -347,15 +299,11 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // ========================================================================
-    // JOIN GROUP
-    // ========================================================================
-
     socket.on('join:group', async (groupId) => {
       try {
         const group = await prismaClient.group.findUnique({
           where: { id: groupId },
-          include: { members: true }
+          include: { members: true },
         });
 
         if (!group) {
@@ -363,20 +311,17 @@ export const initChatHandler = (io, prismaClient) => {
           return;
         }
 
-        if (!group.members.some(m => m.userId === userId)) {
+        if (!group.members.some((m) => m.userId === userId)) {
           socket.emit('error', { message: 'No access to this group' });
           return;
         }
 
         socket.join(`group:${groupId}`);
-        socket.emit('joined:group', {
-          groupId,
-          message: 'Joined group'
-        });
+        socket.emit('joined:group', { groupId, message: 'Joined group' });
 
-        io.to(`group:${groupId}`).emit('group:member-joined', {
+        socket.to(`group:${groupId}`).emit('group:member-joined', {
           groupId,
-          userId
+          userId,
         });
       } catch (error) {
         console.error('Join group error:', error);
@@ -384,23 +329,14 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // ========================================================================
-    // LEAVE GROUP
-    // ========================================================================
-
     socket.on('leave:group', (groupId) => {
       socket.leave(`group:${groupId}`);
       socket.emit('left:group', { groupId });
-
-      io.to(`group:${groupId}`).emit('group:member-left', {
+      socket.to(`group:${groupId}`).emit('group:member-left', {
         groupId,
-        userId
+        userId,
       });
     });
-
-    // ========================================================================
-    // DISCONNECT
-    // ========================================================================
 
     socket.on('disconnect', async () => {
       try {
@@ -408,11 +344,9 @@ export const initChatHandler = (io, prismaClient) => {
           where: { id: userId },
           data: {
             isOnline: false,
-            lastSeen: new Date()
-          }
+            lastSeen: new Date(),
+          },
         });
-
-        io.emit('user:offline', { userId });
       } catch (error) {
         console.error('Disconnect error:', error);
       }
