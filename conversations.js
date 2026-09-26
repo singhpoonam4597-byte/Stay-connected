@@ -41,7 +41,14 @@ const requireConversationAccess = async (req, res, next) => {
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const currentUserId = req.user?.id || req.userId;
-    const { otherUserId } = req.body;
+    // Accept whatever the frontend sends
+    const otherUserId =
+      req.body?.otherUserId ||
+      req.body?.userId ||
+      req.body?.participantId ||
+      req.body?.receiverId ||
+      req.body?.targetUserId ||
+      req.body?.toUserId;
 
     if (!otherUserId) {
       return res.status(400).json({ error: 'Other user ID is required', code: 'MISSING_USER_ID' });
