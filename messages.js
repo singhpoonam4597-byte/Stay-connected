@@ -4,18 +4,21 @@ import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
-router.post('/conversation', authenticateToken, async (req, res) => {
+async function sendConversationMessage(req, res) {
   try {
     const userId = req.user?.id || req.userId;
-    const { conversationId, content, replyToId } = req.body;
+    const body = req.body || {};
+    const conversationId = body.conversationId || body.conversation_id;
+    const content = body.content || body.text || body.message;
+    const replyToId = body.replyToId || body.reply_to_id || null;
 
     if (!conversationId) {
       return res.status(400).json({ error: 'Conversation ID is required', code: 'MISSING_CONVERSATION_ID' });
     }
-    if (!content || content.trim().length === 0) {
+    if (!content || String(content).trim().length === 0) {
       return res.status(400).json({ error: 'Message content is required', code: 'EMPTY_CONTENT' });
     }
-    if (content.length > 5000) {
+    if (String(content).length > 5000) {
       return res.status(400).json({ error: 'Message is too long (max 5000 characters)', code: 'CONTENT_TOO_LONG' });
     }
 
@@ -34,9 +37,10 @@ router.post('/conversation', authenticateToken, async (req, res) => {
       }
     }
 
+    const trimmed = String(content).trim();
     const message = await prisma.message.create({
       data: {
-        content: content.trim(),
+        content: trimmed,
         senderId: userId,
         conversationId,
         replyToId: replyToId || null,
@@ -59,7 +63,7 @@ router.post('/conversation', authenticateToken, async (req, res) => {
     await prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        lastMessage: content.substring(0, 100),
+        lastMessage: trimmed.substring(0, 100),
         lastMessageAt: new Date(),
         lastMessageBy: userId,
       },
@@ -70,20 +74,23 @@ router.post('/conversation', authenticateToken, async (req, res) => {
     console.error('Send message error:', error);
     res.status(500).json({ error: 'Failed to send message', code: 'SEND_ERROR' });
   }
-});
+}
 
-router.post('/group', authenticateToken, async (req, res) => {
+async function sendGroupMessage(req, res) {
   try {
     const userId = req.user?.id || req.userId;
-    const { groupId, content, replyToId } = req.body;
+    const body = req.body || {};
+    const groupId = body.groupId || body.group_id;
+    const content = body.content || body.text || body.message;
+    const replyToId = body.replyToId || body.reply_to_id || null;
 
     if (!groupId) {
       return res.status(400).json({ error: 'Group ID is required', code: 'MISSING_GROUP_ID' });
     }
-    if (!content || content.trim().length === 0) {
+    if (!content || String(content).trim().length === 0) {
       return res.status(400).json({ error: 'Message content is required', code: 'EMPTY_CONTENT' });
     }
-    if (content.length > 5000) {
+    if (String(content).length > 5000) {
       return res.status(400).json({ error: 'Message is too long (max 5000 characters)', code: 'CONTENT_TOO_LONG' });
     }
 
@@ -105,9 +112,10 @@ router.post('/group', authenticateToken, async (req, res) => {
       }
     }
 
+    const trimmed = String(content).trim();
     const message = await prisma.message.create({
       data: {
-        content: content.trim(),
+        content: trimmed,
         senderId: userId,
         groupId,
         replyToId: replyToId || null,
@@ -134,18 +142,27 @@ router.post('/group', authenticateToken, async (req, res) => {
     console.error('Send group message error:', error);
     res.status(500).json({ error: 'Failed to send message', code: 'SEND_ERROR' });
   }
+}
+
+// Alias: POST /api/messages
+router.post('/', authenticateToken, async (req, res) => {
+  if (req.body?.groupId || req.body?.group_id) return sendGroupMessage(req, res);
+  return sendConversationMessage(req, res);
 });
+
+router.post('/conversation', authenticateToken, sendConversationMessage);
+router.post('/group', authenticateToken, sendGroupMessage);
 
 router.patch('/:messageId', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
     const { messageId } = req.params;
-    const { content } = req.body;
+    const content = req.body?.content || req.body?.text;
 
-    if (!content || content.trim().length === 0) {
+    if (!content || String(content).trim().length === 0) {
       return res.status(400).json({ error: 'Message content is required', code: 'EMPTY_CONTENT' });
     }
-    if (content.length > 5000) {
+    if (String(content).length > 5000) {
       return res.status(400).json({ error: 'Message is too long (max 5000 characters)', code: 'CONTENT_TOO_LONG' });
     }
 
@@ -160,7 +177,7 @@ router.patch('/:messageId', authenticateToken, async (req, res) => {
     const updatedMessage = await prisma.message.update({
       where: { id: messageId },
       data: {
-        content: content.trim(),
+        content: String(content).trim(),
         isEdited: true,
         editedAt: new Date(),
       },
@@ -178,7 +195,6 @@ router.patch('/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
-// Soft-delete: mark isDeleted instead of removing the row
 router.delete('/:messageId', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
