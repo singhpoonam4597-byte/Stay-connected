@@ -4,6 +4,15 @@ import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
+function broadcast(req, room, event, payload) {
+  try {
+    const io = req.app.get('io');
+    if (io) io.to(room).emit(event, payload);
+  } catch (e) {
+    console.error('Socket broadcast failed:', e?.message || e);
+  }
+}
+
 async function sendConversationMessage(req, res) {
   try {
     const userId = req.user?.id || req.userId;
@@ -67,6 +76,12 @@ async function sendConversationMessage(req, res) {
         lastMessageAt: new Date(),
         lastMessageBy: userId,
       },
+    });
+
+    // Realtime: anyone in the conversation room receives this
+    broadcast(req, `conversation:${conversationId}`, 'message:new', {
+      message,
+      conversationId,
     });
 
     res.status(201).json({ success: true, data: { message } });
@@ -137,6 +152,11 @@ async function sendGroupMessage(req, res) {
 
     await prisma.group.update({ where: { id: groupId }, data: { updatedAt: new Date() } });
 
+    broadcast(req, `group:${groupId}`, 'message:new', {
+      message,
+      groupId,
+    });
+
     res.status(201).json({ success: true, data: { message } });
   } catch (error) {
     console.error('Send group message error:', error);
@@ -144,7 +164,6 @@ async function sendGroupMessage(req, res) {
   }
 }
 
-// Alias: POST /api/messages
 router.post('/', authenticateToken, async (req, res) => {
   if (req.body?.groupId || req.body?.group_id) return sendGroupMessage(req, res);
   return sendConversationMessage(req, res);
@@ -188,6 +207,11 @@ router.patch('/:messageId', authenticateToken, async (req, res) => {
       },
     });
 
+    const room = message.conversationId
+      ? `conversation:${message.conversationId}`
+      : `group:${message.groupId}`;
+    broadcast(req, room, 'message:edited', { message: updatedMessage, messageId });
+
     res.status(200).json({ success: true, data: { message: updatedMessage } });
   } catch (error) {
     console.error('Edit message error:', error);
@@ -216,6 +240,11 @@ router.delete('/:messageId', authenticateToken, async (req, res) => {
         content: '',
       },
     });
+
+    const room = message.conversationId
+      ? `conversation:${message.conversationId}`
+      : `group:${message.groupId}`;
+    broadcast(req, room, 'message:deleted', { messageId });
 
     res.status(200).json({ success: true, message: 'Message deleted' });
   } catch (error) {
@@ -256,6 +285,11 @@ router.post('/:messageId/react', authenticateToken, async (req, res) => {
         reactions: { include: { user: { select: { id: true, displayName: true } } } },
       },
     });
+
+    const room = message.conversationId
+      ? `conversation:${message.conversationId}`
+      : `group:${message.groupId}`;
+    broadcast(req, room, 'message:reaction', { message: updatedMessage, messageId });
 
     res.status(201).json({ success: true, data: { reaction, message: updatedMessage } });
   } catch (error) {
