@@ -30,11 +30,27 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 const app = express();
 const httpServer = createServer(app);
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// Comma-separated list supported, e.g. https://a.vercel.app,https://b.vercel.app
+const FRONTEND_URLS = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const corsOrigin = (origin, cb) => {
+  // Allow non-browser tools (no Origin) and listed frontends
+  if (!origin || FRONTEND_URLS.includes(origin)) {
+    return cb(null, true);
+  }
+  // Also allow any *.vercel.app preview while launching (tighten later)
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) {
+    return cb(null, true);
+  }
+  return cb(new Error(`CORS blocked: ${origin}`));
+};
 
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: FRONTEND_URL,
+    origin: corsOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   },
@@ -44,20 +60,21 @@ const io = new SocketIOServer(httpServer, {
   pingTimeout: 60000,
 });
 
-// So HTTP routes can broadcast without circular imports
 app.set('io', io);
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 app.use(
   cors({
-    origin: FRONTEND_URL,
+    origin: corsOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -103,6 +120,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
     uptime: process.uptime(),
+    allowedFrontends: FRONTEND_URLS,
   });
 });
 
@@ -119,13 +137,18 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token;
+    const token =
+      socket.handshake.auth?.token ||
+      socket.handshake.query?.token ||
+      (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+
     if (!token) return next(new Error('Authentication error'));
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded.id;
+    socket.userId = decoded.id || decoded.userId || decoded.sub;
     socket.userEmail = decoded.email;
     socket.username = decoded.username;
+    if (!socket.userId) return next(new Error('Authentication error'));
     next();
   } catch {
     next(new Error('Authentication error'));
@@ -159,7 +182,7 @@ httpServer.listen(PORT, HOST, () => {
   console.log('='.repeat(50));
   console.log('Connect backend started');
   console.log(`Listening on ${HOST}:${PORT}`);
-  console.log(`FRONTEND_URL: ${FRONTEND_URL}`);
+  console.log(`FRONTEND_URLS: ${FRONTEND_URLS.join(', ')}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
   console.log('='.repeat(50));
 });
