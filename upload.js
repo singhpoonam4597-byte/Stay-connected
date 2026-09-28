@@ -32,6 +32,7 @@ function runUpload(req, res, next) {
  * POST /api/upload/message-attachment
  * form-data: file (image)
  * returns { attachment: { id, fileUrl, mimeType, fileName, fileSize } }
+ * Note: attachment is not linked to a message yet — link on send message.
  */
 router.post('/message-attachment', runUpload, async (req, res) => {
   try {
