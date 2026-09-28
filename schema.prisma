@@ -151,7 +151,6 @@ model Message {
   @@index([isPinned])
   @@index([isDeleted])
 }
-
 model Reaction {
   id        String   @id @default(cuid())
   messageId String   @db.Text
