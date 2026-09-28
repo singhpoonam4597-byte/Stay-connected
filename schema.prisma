@@ -1,5 +1,4 @@
-// Prisma schema — Connect chat backend
-
+// This is your Prisma schema file for Connect messaging app
 generator client {
   provider = "prisma-client-js"
 }
@@ -63,47 +62,20 @@ model SessionToken {
   @@index([expiresAt])
 }
 
-model BlockedUser {
-  id        String   @id @default(cuid())
-  blockerId String   @db.Text
-  blocker   User     @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
-  blockedId String   @db.Text
-  blocked   User     @relation("blocked", fields: [blockedId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@unique([blockerId, blockedId])
-  @@index([blockerId])
-  @@index([blockedId])
-}
-
-model Friendship {
-  id          String   @id @default(cuid())
-  initiatorId String   @db.Text
-  initiator   User     @relation("initiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  receiverId  String   @db.Text
-  receiver    User     @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  status      String   @default("pending") @db.VarChar(20)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@unique([initiatorId, receiverId])
-  @@index([initiatorId])
-  @@index([receiverId])
-  @@index([status])
-}
-
 model Conversation {
-  id            String    @id @default(cuid())
-  user1Id       String    @db.Text
-  user1         User      @relation("user1", fields: [user1Id], references: [id], onDelete: Cascade)
-  user2Id       String    @db.Text
-  user2         User      @relation("user2", fields: [user2Id], references: [id], onDelete: Cascade)
-  messages      Message[]
-  lastMessage   String?   @db.Text
-  lastMessageAt DateTime?
-  lastMessageBy String?   @db.Text
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  user1Id         String    @db.Text
+  user1           User      @relation("user1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2Id         String    @db.Text
+  user2           User      @relation("user2", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages        Message[]
+  lastMessage     String?   @db.Text
+  lastMessageAt   DateTime?
+  lastMessageBy   String?   @db.Text
+  user1LastReadAt DateTime?
+  user2LastReadAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@unique([user1Id, user2Id])
   @@index([user1Id])
@@ -117,28 +89,30 @@ model Group {
   name          String        @db.VarChar(100)
   description   String?       @db.Text
   avatar        String?       @db.Text
-  createdById   String        @db.Text
-  createdBy     User          @relation("GroupCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  isPrivate     Boolean       @default(false)
+  createdBy     String        @db.Text
+  creator       User          @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: Cascade)
   members       GroupMember[]
   messages      Message[]     @relation("GroupMessages")
-  isPublic      Boolean       @default(false)
-  pinnedMessage String?       @db.Text
+  lastMessage   String?       @db.Text
+  lastMessageAt DateTime?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  @@index([createdById])
-  @@index([isPublic])
+  @@index([createdBy])
   @@index([createdAt])
+  @@index([lastMessageAt])
 }
 
 model GroupMember {
-  id       String   @id @default(cuid())
-  groupId  String   @db.Text
-  group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  userId   String   @db.Text
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role     String   @default("member") @db.VarChar(20)
-  joinedAt DateTime @default(now())
+  id         String    @id @default(cuid())
+  groupId    String    @db.Text
+  group      Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId     String    @db.Text
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       String    @default("member") @db.VarChar(20)
+  lastReadAt DateTime?
+  joinedAt   DateTime  @default(now())
 
   @@unique([groupId, userId])
   @@index([groupId])
@@ -244,4 +218,33 @@ model UserSettings {
   updatedAt            DateTime @updatedAt
 
   @@index([userId])
+}
+
+model Friendship {
+  id          String   @id @default(cuid())
+  initiatorId String   @db.Text
+  initiator   User     @relation("initiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiverId  String   @db.Text
+  receiver    User     @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status      String   @default("pending") @db.VarChar(20)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([initiatorId, receiverId])
+  @@index([initiatorId])
+  @@index([receiverId])
+  @@index([status])
+}
+
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String   @db.Text
+  blocker   User     @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String   @db.Text
+  blocked   User     @relation("blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
 }
