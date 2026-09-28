@@ -21,13 +21,16 @@ async function sendConversationMessage(req, res) {
     const content = body.content || body.text || body.message;
     const replyToId = body.replyToId || body.reply_to_id || null;
 
+    const attachmentIds = body.attachmentIds || body.attachment_ids || [];
     if (!conversationId) {
       return res.status(400).json({ error: 'Conversation ID is required', code: 'MISSING_CONVERSATION_ID' });
     }
-    if (!content || String(content).trim().length === 0) {
-      return res.status(400).json({ error: 'Message content is required', code: 'EMPTY_CONTENT' });
+    const hasText = content && String(content).trim().length > 0;
+    const hasAttachments = Array.isArray(attachmentIds) && attachmentIds.length > 0;
+    if (!hasText && !hasAttachments) {
+      return res.status(400).json({ error: 'Message content or attachment is required', code: 'EMPTY_CONTENT' });
     }
-    if (String(content).length > 5000) {
+    if (hasText && String(content).length > 5000) {
       return res.status(400).json({ error: 'Message is too long (max 5000 characters)', code: 'CONTENT_TOO_LONG' });
     }
 
@@ -46,7 +49,7 @@ async function sendConversationMessage(req, res) {
       }
     }
 
-    const trimmed = String(content).trim();
+    const trimmed = hasText ? String(content).trim() : (hasAttachments ? '📷 Photo' : '');
     const message = await prisma.message.create({
       data: {
         content: trimmed,
@@ -68,6 +71,36 @@ async function sendConversationMessage(req, res) {
         attachments: true,
       },
     });
+
+    // Link uploaded attachments to this message
+    if (hasAttachments) {
+      await prisma.attachment.updateMany({
+        where: {
+          id: { in: attachmentIds },
+          uploadedBy: userId,
+          messageId: null,
+        },
+        data: { messageId: message.id },
+      });
+      // reload message with attachments
+      const full = await prisma.message.findUnique({
+        where: { id: message.id },
+        include: {
+          sender: { select: { id: true, username: true, displayName: true, avatar: true } },
+          replyTo: {
+            select: {
+              id: true,
+              content: true,
+              isDeleted: true,
+              sender: { select: { displayName: true } },
+            },
+          },
+          reactions: true,
+          attachments: true,
+        },
+      });
+      if (full) Object.assign(message, full);
+    }
 
     await prisma.conversation.update({
       where: { id: conversationId },
@@ -99,13 +132,16 @@ async function sendGroupMessage(req, res) {
     const content = body.content || body.text || body.message;
     const replyToId = body.replyToId || body.reply_to_id || null;
 
+    const attachmentIds = body.attachmentIds || body.attachment_ids || [];
     if (!groupId) {
       return res.status(400).json({ error: 'Group ID is required', code: 'MISSING_GROUP_ID' });
     }
-    if (!content || String(content).trim().length === 0) {
-      return res.status(400).json({ error: 'Message content is required', code: 'EMPTY_CONTENT' });
+    const hasText = content && String(content).trim().length > 0;
+    const hasAttachments = Array.isArray(attachmentIds) && attachmentIds.length > 0;
+    if (!hasText && !hasAttachments) {
+      return res.status(400).json({ error: 'Message content or attachment is required', code: 'EMPTY_CONTENT' });
     }
-    if (String(content).length > 5000) {
+    if (hasText && String(content).length > 5000) {
       return res.status(400).json({ error: 'Message is too long (max 5000 characters)', code: 'CONTENT_TOO_LONG' });
     }
 
@@ -127,7 +163,7 @@ async function sendGroupMessage(req, res) {
       }
     }
 
-    const trimmed = String(content).trim();
+    const trimmed = hasText ? String(content).trim() : (hasAttachments ? '📷 Photo' : '');
     const message = await prisma.message.create({
       data: {
         content: trimmed,
