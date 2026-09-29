@@ -1,10 +1,10 @@
 import express from 'express';
 import multer from 'multer';
+import { prisma } from './server.js';
 
 const router = express.Router();
 
-// In-memory upload (no S3 required). Stores image as data URL in DB.
-// Limit 2MB — fine for chat photos on Neon MVP.
+// In-memory image upload (no S3). Max 2MB. Stored as data URL in DB for MVP.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
@@ -19,8 +19,12 @@ const upload = multer({
 function runUpload(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (err) {
+      const msg =
+        err.code === 'LIMIT_FILE_SIZE'
+          ? 'Image must be under 2MB'
+          : err.message || 'Upload failed';
       return res.status(400).json({
-        error: err.message || 'Upload failed',
+        error: msg,
         code: 'UPLOAD_ERROR',
       });
     }
@@ -30,14 +34,14 @@ function runUpload(req, res, next) {
 
 /**
  * POST /api/upload/message-attachment
- * form-data: file (image)
- * returns { attachment: { id, fileUrl, mimeType, fileName, fileSize } }
- * Note: attachment is not linked to a message yet — link on send message.
+ * form-data field name: file
  */
 router.post('/message-attachment', runUpload, async (req, res) => {
   try {
-    const { prisma } = await import('./server.js');
     const userId = req.user?.id || req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized', code: 'NO_USER' });
+    }
 
     if (!req.file) {
       return res.status(400).json({
@@ -53,11 +57,11 @@ router.post('/message-attachment', runUpload, async (req, res) => {
     const attachment = await prisma.attachment.create({
       data: {
         uploadedBy: userId,
-        fileName: req.file.originalname || 'image.jpg',
+        fileName: (req.file.originalname || 'image.jpg').slice(0, 255),
         fileSize: BigInt(req.file.size || 0),
-        fileType: mime.split('/')[1] || 'image',
+        fileType: (mime.split('/')[1] || 'image').slice(0, 100),
         fileUrl: dataUrl,
-        mimeType: mime,
+        mimeType: mime.slice(0, 100),
         messageId: null,
       },
     });
@@ -77,7 +81,7 @@ router.post('/message-attachment', runUpload, async (req, res) => {
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({
-      error: 'Failed to upload file',
+      error: error?.message || 'Failed to upload file',
       code: 'UPLOAD_ERROR',
     });
   }
@@ -85,8 +89,10 @@ router.post('/message-attachment', runUpload, async (req, res) => {
 
 router.post('/avatar', runUpload, async (req, res) => {
   try {
-    const { prisma } = await import('./server.js');
     const userId = req.user?.id || req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized', code: 'NO_USER' });
+    }
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided', code: 'MISSING_FILE' });
@@ -110,7 +116,10 @@ router.post('/avatar', runUpload, async (req, res) => {
     res.status(200).json({ success: true, data: { user } });
   } catch (error) {
     console.error('Avatar upload error:', error);
-    res.status(500).json({ error: 'Failed to upload avatar', code: 'UPLOAD_ERROR' });
+    res.status(500).json({
+      error: error?.message || 'Failed to upload avatar',
+      code: 'UPLOAD_ERROR',
+    });
   }
 });
 
