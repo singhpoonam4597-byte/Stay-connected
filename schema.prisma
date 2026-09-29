@@ -15,6 +15,7 @@ model User {
   displayName           String?    @db.VarChar(100)
   password              String     @db.VarChar(255)
   avatar                String?    @db.Text
+  avatarColor           Int?
   bio                   String?    @db.Text
   isPrivate             Boolean    @default(false)
   isVerified            Boolean    @default(false)
