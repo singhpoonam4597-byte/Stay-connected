@@ -89,9 +89,9 @@ model Group {
   name          String        @db.VarChar(100)
   description   String?       @db.Text
   avatar        String?       @db.Text
-  isPrivate     Boolean       @default(false)
-  createdBy     String        @db.Text
-  creator       User          @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  isPublic      Boolean       @default(false)
+  createdById   String        @db.Text
+  createdBy     User          @relation("GroupCreator", fields: [createdById], references: [id], onDelete: Cascade)
   members       GroupMember[]
   messages      Message[]     @relation("GroupMessages")
   lastMessage   String?       @db.Text
@@ -99,7 +99,7 @@ model Group {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  @@index([createdBy])
+  @@index([createdById])
   @@index([createdAt])
   @@index([lastMessageAt])
 }
@@ -151,6 +151,7 @@ model Message {
   @@index([isPinned])
   @@index([isDeleted])
 }
+
 model Reaction {
   id        String   @id @default(cuid())
   messageId String   @db.Text
