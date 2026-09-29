@@ -30,7 +30,6 @@ async function checkNotBlocked(req, res, next) {
   }
 }
 
-/** IDs of users involved in a block with current user (either direction) */
 async function getBlockedRelatedIds(currentUserId) {
   const rows = await prisma.blockedUser.findMany({
     where: {
@@ -45,6 +44,17 @@ async function getBlockedRelatedIds(currentUserId) {
   }
   return [...ids];
 }
+
+const publicUserSelect = {
+  id: true,
+  username: true,
+  displayName: true,
+  avatar: true,
+  avatarColor: true,
+  bio: true,
+  isVerified: true,
+  isOnline: true,
+};
 
 router.get('/search', async (req, res) => {
   try {
@@ -75,15 +85,7 @@ router.get('/search', async (req, res) => {
           ...(excludedIds.length ? [{ id: { notIn: excludedIds } }] : []),
         ],
       },
-      select: {
-        id: true,
-        username: true,
-        displayName: true,
-        avatar: true,
-        bio: true,
-        isVerified: true,
-        isOnline: true,
-      },
+      select: publicUserSelect,
       take: maxLimit,
       orderBy: [{ isVerified: 'desc' }, { lastSeen: 'desc' }],
     });
@@ -109,6 +111,7 @@ router.get('/me/blocked', async (req, res) => {
             username: true,
             displayName: true,
             avatar: true,
+            avatarColor: true,
             isVerified: true,
             isOnline: true,
           },
@@ -135,23 +138,53 @@ router.get('/me/blocked', async (req, res) => {
 
 router.patch('/me/profile', async (req, res) => {
   try {
-    const userId = req.userId;
-    const { displayName, bio, isPrivate } = req.body;
+    const userId = req.user?.id || req.userId;
+    const { displayName, bio, isPrivate, avatar, avatarColor } = req.body || {};
     const updateData = {};
 
     if (displayName !== undefined) {
-      if (displayName.length > 100) {
-        return res.status(400).json({ error: 'Display name must be less than 100 characters' });
+      if (String(displayName).length > 100) {
+        return res.status(400).json({
+          error: 'Display name must be less than 100 characters',
+        });
       }
       updateData.displayName = displayName;
     }
     if (bio !== undefined) {
-      if (bio.length > 500) {
-        return res.status(400).json({ error: 'Bio must be less than 500 characters' });
+      if (String(bio).length > 500) {
+        return res.status(400).json({
+          error: 'Bio must be less than 500 characters',
+        });
       }
       updateData.bio = bio;
     }
-    if (isPrivate !== undefined) updateData.isPrivate = isPrivate;
+    if (isPrivate !== undefined) updateData.isPrivate = !!isPrivate;
+
+    // avatar: string URL, or null to clear (initials only)
+    if (avatar !== undefined) {
+      if (avatar === null || avatar === '') {
+        updateData.avatar = null;
+      } else if (typeof avatar === 'string' && avatar.length < 2000) {
+        updateData.avatar = avatar;
+      } else {
+        return res.status(400).json({ error: 'Invalid avatar value' });
+      }
+    }
+
+    // avatarColor: 0–11 index into Connect palette, or null
+    if (avatarColor !== undefined) {
+      if (avatarColor === null) {
+        updateData.avatarColor = null;
+      } else {
+        const n = Number(avatarColor);
+        if (!Number.isInteger(n) || n < 0 || n > 11) {
+          return res.status(400).json({
+            error: 'avatarColor must be an integer 0–11',
+          });
+        }
+        updateData.avatarColor = n;
+      }
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
@@ -161,6 +194,7 @@ router.patch('/me/profile', async (req, res) => {
         username: true,
         displayName: true,
         avatar: true,
+        avatarColor: true,
         bio: true,
         isPrivate: true,
         isVerified: true,
@@ -187,6 +221,7 @@ router.get('/:userId', checkNotBlocked, async (req, res) => {
         username: true,
         displayName: true,
         avatar: true,
+        avatarColor: true,
         bio: true,
         isPrivate: true,
         isVerified: true,
@@ -238,7 +273,6 @@ router.post('/:userId/block', async (req, res) => {
       data: { blockerId: currentUserId, blockedId: userId },
     });
 
-    // Optional: clean friendship rows if any
     await prisma.friendship.deleteMany({
       where: {
         OR: [
