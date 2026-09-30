@@ -4,44 +4,39 @@ import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
 
-const requireConversationAccess = async (req, res, next) => {
+const userPublicSelect = {
+  id: true,
+  username: true,
+  displayName: true,
+  avatar: true,
+  avatarColor: true,
+  isOnline: true,
+};
+
+async function requireConversationAccess(req, res, next) {
   try {
-    const userId = req.user?.id || req.userId;
+    const currentUserId = req.user?.id || req.userId;
     const { conversationId } = req.params;
-
-    if (!conversationId) {
-      return res.status(400).json({
-        error: 'Conversation ID is required',
-        code: 'MISSING_CONVERSATION_ID',
-      });
-    }
-
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
-      select: { user1Id: true, user2Id: true },
     });
-
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found', code: 'NOT_FOUND' });
     }
-
-    if (conversation.user1Id !== userId && conversation.user2Id !== userId) {
-      return res.status(403).json({
-        error: 'You do not have access to this conversation',
-        code: 'NO_ACCESS',
-      });
+    if (conversation.user1Id !== currentUserId && conversation.user2Id !== currentUserId) {
+      return res.status(403).json({ error: 'No access to this conversation', code: 'NO_ACCESS' });
     }
-
+    req.conversation = conversation;
     next();
-  } catch (error) {
-    next(error);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Access check failed' });
   }
-};
+}
 
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const currentUserId = req.user?.id || req.userId;
-    // Accept whatever the frontend sends
     const otherUserId =
       req.body?.otherUserId ||
       req.body?.userId ||
@@ -88,12 +83,8 @@ router.post('/', authenticateToken, async (req, res) => {
         ],
       },
       include: {
-        user1: {
-          select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-        },
-        user2: {
-          select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-        },
+        user1: { select: userPublicSelect },
+        user2: { select: userPublicSelect },
         _count: { select: { messages: true } },
       },
     });
@@ -102,12 +93,8 @@ router.post('/', authenticateToken, async (req, res) => {
       conversation = await prisma.conversation.create({
         data: { user1Id: currentUserId, user2Id: otherUserId },
         include: {
-          user1: {
-            select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-          },
-          user2: {
-            select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-          },
+          user1: { select: userPublicSelect },
+          user2: { select: userPublicSelect },
           _count: { select: { messages: true } },
         },
       });
@@ -130,12 +117,8 @@ router.get('/', authenticateToken, async (req, res) => {
         OR: [{ user1Id: currentUserId }, { user2Id: currentUserId }],
       },
       include: {
-        user1: {
-          select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-        },
-        user2: {
-          select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-        },
+        user1: { select: userPublicSelect },
+        user2: { select: userPublicSelect },
         _count: { select: { messages: true } },
       },
       orderBy: { lastMessageAt: 'desc' },
@@ -149,7 +132,6 @@ router.get('/', authenticateToken, async (req, res) => {
       },
     });
 
-    // Attach server-side unread counts
     const withUnread = await Promise.all(
       conversations.map(async (c) => {
         const isUser1 = c.user1Id === currentUserId;
@@ -181,7 +163,6 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// Mark conversation as read for current user
 router.post('/:conversationId/read', authenticateToken, requireConversationAccess, async (req, res) => {
   try {
     const currentUserId = req.user?.id || req.userId;
@@ -196,10 +177,8 @@ router.post('/:conversationId/read', authenticateToken, requireConversationAcces
       conversation.user1Id === currentUserId
         ? { user1LastReadAt: now }
         : { user2LastReadAt: now };
-
     await prisma.conversation.update({ where: { id: conversationId }, data });
 
-    // Notify peer so they can show read receipts
     const io = req.app.get('io');
     if (io) {
       io.to(`conversation:${conversationId}`).emit('conversation:read', {
@@ -209,7 +188,7 @@ router.post('/:conversationId/read', authenticateToken, requireConversationAcces
       });
     }
 
-    res.status(200).json({ success: true, data: { readAt: now.toISOString() } });
+    res.status(200).json({ success: true, data: { conversationId, readAt: now.toISOString() } });
   } catch (error) {
     console.error('Mark conversation read error:', error);
     res.status(500).json({ error: 'Failed to mark as read', code: 'READ_ERROR' });
@@ -228,7 +207,7 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       },
       include: {
         sender: {
-          select: { id: true, username: true, displayName: true, avatar: true },
+          select: { id: true, username: true, displayName: true, avatar: true, avatarColor: true },
         },
         replyTo: {
           select: {
@@ -250,7 +229,6 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       skip: Math.max(parseInt(offset) || 0, 0),
     });
 
-    // Mark as read for current user
     try {
       const currentUserId = req.user?.id || req.userId;
       const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
@@ -274,7 +252,6 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       console.error('Auto mark read failed', e);
     }
 
-
     const total = await prisma.message.count({
       where: { conversationId, isDeleted: false },
     });
@@ -297,40 +274,17 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
 router.get('/:conversationId', authenticateToken, requireConversationAccess, async (req, res) => {
   try {
     const { conversationId } = req.params;
-
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
-        user1: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatar: true,
-            bio: true,
-            isOnline: true,
-            isVerified: true,
-          },
-        },
-        user2: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatar: true,
-            bio: true,
-            isOnline: true,
-            isVerified: true,
-          },
-        },
+        user1: { select: userPublicSelect },
+        user2: { select: userPublicSelect },
         _count: { select: { messages: true } },
       },
     });
-
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found', code: 'NOT_FOUND' });
     }
-
     res.status(200).json({ success: true, data: { conversation } });
   } catch (error) {
     console.error('Get conversation error:', error);
@@ -341,11 +295,8 @@ router.get('/:conversationId', authenticateToken, requireConversationAccess, asy
 router.delete('/:conversationId', authenticateToken, requireConversationAccess, async (req, res) => {
   try {
     const { conversationId } = req.params;
-
-    await prisma.message.deleteMany({ where: { conversationId } });
     await prisma.conversation.delete({ where: { id: conversationId } });
-
-    res.status(200).json({ success: true, message: 'Conversation deleted' });
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error('Delete conversation error:', error);
     res.status(500).json({ error: 'Failed to delete conversation', code: 'DELETE_ERROR' });
@@ -355,37 +306,31 @@ router.delete('/:conversationId', authenticateToken, requireConversationAccess, 
 router.get('/:conversationId/search', authenticateToken, requireConversationAccess, async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { q, limit = 20 } = req.query;
-
-    if (!q || q.trim().length === 0) {
-      return res.status(400).json({ error: 'Search query is required', code: 'MISSING_QUERY' });
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.status(400).json({ error: 'Query is required', code: 'MISSING_QUERY' });
     }
-
     const messages = await prisma.message.findMany({
       where: {
-        AND: [
-          { conversationId },
-          { isDeleted: false },
-          { content: { contains: q.trim(), mode: 'insensitive' } },
-        ],
+        conversationId,
+        isDeleted: false,
+        content: { contains: q, mode: 'insensitive' },
       },
       include: {
         sender: {
-          select: { id: true, username: true, displayName: true, avatar: true },
+          select: { id: true, username: true, displayName: true, avatar: true, avatarColor: true },
         },
-        reactions: true,
       },
       orderBy: { createdAt: 'desc' },
-      take: Math.min(parseInt(limit) || 20, 100),
+      take: 50,
     });
-
     res.status(200).json({
       success: true,
       data: { messages, count: messages.length },
     });
   } catch (error) {
     console.error('Search messages error:', error);
-    res.status(500).json({ error: 'Search failed', code: 'SEARCH_ERROR' });
+    res.status(500).json({ error: 'Failed to search messages', code: 'SEARCH_ERROR' });
   }
 });
 
