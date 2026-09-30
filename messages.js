@@ -13,6 +13,18 @@ function broadcast(req, room, event, payload) {
   }
 }
 
+function serializeMessage(m) {
+  if (!m || typeof m !== 'object') return m;
+  const out = { ...m };
+  if (Array.isArray(out.attachments)) {
+    out.attachments = out.attachments.map((a) => ({
+      ...a,
+      fileSize: typeof a.fileSize === 'bigint' ? Number(a.fileSize) : a.fileSize,
+    }));
+  }
+  return out;
+}
+
 async function sendConversationMessage(req, res) {
   try {
     const userId = req.user?.id || req.userId;
@@ -20,8 +32,8 @@ async function sendConversationMessage(req, res) {
     const conversationId = body.conversationId || body.conversation_id;
     const content = body.content || body.text || body.message;
     const replyToId = body.replyToId || body.reply_to_id || null;
-
     const attachmentIds = body.attachmentIds || body.attachment_ids || [];
+
     if (!conversationId) {
       return res.status(400).json({ error: 'Conversation ID is required', code: 'MISSING_CONVERSATION_ID' });
     }
@@ -72,17 +84,11 @@ async function sendConversationMessage(req, res) {
       },
     });
 
-    // Link uploaded attachments to this message
     if (hasAttachments) {
       await prisma.attachment.updateMany({
-        where: {
-          id: { in: attachmentIds },
-          uploadedBy: userId,
-          messageId: null,
-        },
+        where: { id: { in: attachmentIds }, uploadedBy: userId, messageId: null },
         data: { messageId: message.id },
       });
-      // reload message with attachments
       const full = await prisma.message.findUnique({
         where: { id: message.id },
         include: {
@@ -111,13 +117,13 @@ async function sendConversationMessage(req, res) {
       },
     });
 
-    // Realtime: anyone in the conversation room receives this
+    const safe = serializeMessage(message);
     broadcast(req, `conversation:${conversationId}`, 'message:new', {
-      message,
+      message: safe,
       conversationId,
     });
 
-    res.status(201).json({ success: true, data: { message } });
+    res.status(201).json({ success: true, data: { message: safe } });
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ error: 'Failed to send message', code: 'SEND_ERROR' });
@@ -131,8 +137,8 @@ async function sendGroupMessage(req, res) {
     const groupId = body.groupId || body.group_id;
     const content = body.content || body.text || body.message;
     const replyToId = body.replyToId || body.reply_to_id || null;
-
     const attachmentIds = body.attachmentIds || body.attachment_ids || [];
+
     if (!groupId) {
       return res.status(400).json({ error: 'Group ID is required', code: 'MISSING_GROUP_ID' });
     }
@@ -186,14 +192,39 @@ async function sendGroupMessage(req, res) {
       },
     });
 
+    if (hasAttachments) {
+      await prisma.attachment.updateMany({
+        where: { id: { in: attachmentIds }, uploadedBy: userId, messageId: null },
+        data: { messageId: message.id },
+      });
+      const full = await prisma.message.findUnique({
+        where: { id: message.id },
+        include: {
+          sender: { select: { id: true, username: true, displayName: true, avatar: true } },
+          replyTo: {
+            select: {
+              id: true,
+              content: true,
+              isDeleted: true,
+              sender: { select: { displayName: true } },
+            },
+          },
+          reactions: true,
+          attachments: true,
+        },
+      });
+      if (full) Object.assign(message, full);
+    }
+
     await prisma.group.update({ where: { id: groupId }, data: { updatedAt: new Date() } });
 
+    const safe = serializeMessage(message);
     broadcast(req, `group:${groupId}`, 'message:new', {
-      message,
+      message: safe,
       groupId,
     });
 
-    res.status(201).json({ success: true, data: { message } });
+    res.status(201).json({ success: true, data: { message: safe } });
   } catch (error) {
     console.error('Send group message error:', error);
     res.status(500).json({ error: 'Failed to send message', code: 'SEND_ERROR' });
@@ -246,9 +277,10 @@ router.patch('/:messageId', authenticateToken, async (req, res) => {
     const room = message.conversationId
       ? `conversation:${message.conversationId}`
       : `group:${message.groupId}`;
-    broadcast(req, room, 'message:edited', { message: updatedMessage, messageId });
+    const safe = serializeMessage(updatedMessage);
+    broadcast(req, room, 'message:edited', { message: safe, messageId });
 
-    res.status(200).json({ success: true, data: { message: updatedMessage } });
+    res.status(200).json({ success: true, data: { message: safe } });
   } catch (error) {
     console.error('Edit message error:', error);
     res.status(500).json({ error: 'Failed to edit message', code: 'EDIT_ERROR' });
