@@ -107,7 +107,20 @@ router.get('/', authenticateToken, async (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
     const take = Math.min(parseInt(limit) || 50, 100);
     const skip = Math.max(parseInt(offset) || 0, 0);
-    const conversations = await prisma.conversation.findMany({
+
+    const blockedRows = await prisma.blockedUser.findMany({
+      where: {
+        OR: [{ blockerId: currentUserId }, { blockedId: currentUserId }],
+      },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedIds = new Set();
+    for (const r of blockedRows) {
+      if (r.blockerId !== currentUserId) blockedIds.add(r.blockerId);
+      if (r.blockedId !== currentUserId) blockedIds.add(r.blockedId);
+    }
+
+    let conversations = await prisma.conversation.findMany({
       where: { OR: [{ user1Id: currentUserId }, { user2Id: currentUserId }] },
       include: {
         user1: { select: userPublicSelect },
@@ -115,12 +128,17 @@ router.get('/', authenticateToken, async (req, res) => {
         _count: { select: { messages: true } },
       },
       orderBy: { lastMessageAt: 'desc' },
-      take,
+      take: take + blockedIds.size,
       skip,
     });
-    const total = await prisma.conversation.count({
-      where: { OR: [{ user1Id: currentUserId }, { user2Id: currentUserId }] },
-    });
+    conversations = conversations
+      .filter((c) => {
+        const other = c.user1Id === currentUserId ? c.user2Id : c.user1Id;
+        return !blockedIds.has(other);
+      })
+      .slice(0, take);
+
+    const total = conversations.length;
     const withUnread = await Promise.all(
       conversations.map(async (c) => {
         const isUser1 = c.user1Id === currentUserId;
@@ -246,6 +264,38 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       code: 'FETCH_ERROR',
       detail: String(error?.message || error),
     });
+  }
+});
+
+router.delete('/:conversationId/messages', authenticateToken, requireConversationAccess, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    await prisma.message.updateMany({
+      where: { conversationId, isDeleted: false },
+      data: {
+        isDeleted: true,
+        deletedAt: new Date(),
+        content: '',
+      },
+    });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        lastMessage: null,
+        lastMessageAt: null,
+        lastMessageBy: null,
+      },
+    });
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`conversation:${conversationId}`).emit('conversation:cleared', {
+        conversationId,
+      });
+    }
+    res.status(200).json({ success: true, data: { conversationId } });
+  } catch (error) {
+    console.error('Clear conversation messages error:', error);
+    res.status(500).json({ error: 'Failed to clear chat', code: 'CLEAR_ERROR' });
   }
 });
 
