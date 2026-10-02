@@ -53,6 +53,18 @@ router.patch('/', authenticateToken, async (req, res) => {
       where: { userId },
       data: updateData,
     });
+
+    if (updateData.showOnlineStatus === false) {
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: { isOnline: false, lastSeen: new Date() },
+        });
+      } catch (e) {
+        console.error('offline on privacy', e?.message);
+      }
+    }
+
     res.status(200).json({ success: true, data: { settings } });
   } catch (error) {
     console.error('Update settings error:', error);
