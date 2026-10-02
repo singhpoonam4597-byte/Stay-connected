@@ -114,11 +114,12 @@ router.get('/', authenticateToken, async (req, res) => {
       },
       select: { blockerId: true, blockedId: true },
     });
-    const blockedIds = new Set();
-    for (const r of blockedRows) {
-      if (r.blockerId !== currentUserId) blockedIds.add(r.blockerId);
-      if (r.blockedId !== currentUserId) blockedIds.add(r.blockedId);
-    }
+    const blockedMeIds = new Set(
+      blockedRows.filter((r) => r.blockedId === currentUserId).map((r) => r.blockerId)
+    );
+    const iBlockedIds = new Set(
+      blockedRows.filter((r) => r.blockerId === currentUserId).map((r) => r.blockedId)
+    );
 
     let conversations = await prisma.conversation.findMany({
       where: { OR: [{ user1Id: currentUserId }, { user2Id: currentUserId }] },
@@ -128,13 +129,13 @@ router.get('/', authenticateToken, async (req, res) => {
         _count: { select: { messages: true } },
       },
       orderBy: { lastMessageAt: 'desc' },
-      take: take + blockedIds.size,
+      take: take + blockedMeIds.size,
       skip,
     });
     conversations = conversations
       .filter((c) => {
         const other = c.user1Id === currentUserId ? c.user2Id : c.user1Id;
-        return !blockedIds.has(other);
+        return !blockedMeIds.has(other);
       })
       .slice(0, take);
 
@@ -142,6 +143,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const withUnread = await Promise.all(
       conversations.map(async (c) => {
         const isUser1 = c.user1Id === currentUserId;
+        const otherId = isUser1 ? c.user2Id : c.user1Id;
         const lastReadAt = isUser1 ? c.user1LastReadAt : c.user2LastReadAt;
         const unreadCount = await prisma.message.count({
           where: {
@@ -151,7 +153,11 @@ router.get('/', authenticateToken, async (req, res) => {
             ...(lastReadAt ? { createdAt: { gt: lastReadAt } } : {}),
           },
         });
-        return { ...c, unreadCount };
+        return {
+          ...c,
+          unreadCount,
+          isBlockedByMe: iBlockedIds.has(otherId),
+        };
       })
     );
     res.status(200).json({ success: true, data: { conversations: withUnread, total, limit: take, offset: skip } });
