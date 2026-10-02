@@ -95,21 +95,66 @@ router.post('/signup', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
-    if (!email?.trim() || !password) {
+    let { email, password } = req.body || {};
+    email = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    password = typeof password === 'string' ? password : '';
+    const passwordTrimmed = password.trim();
+    if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
-    const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
-    if (!user?.password) return res.status(401).json({ error: 'Invalid email or password' });
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
-    const token = generateToken(user);
+    if (!email.includes('@')) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || !user.password) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    let ok = false;
+    try {
+      ok = await bcrypt.compare(password, user.password);
+      if (!ok && passwordTrimmed !== password) {
+        ok = await bcrypt.compare(passwordTrimmed, user.password);
+      }
+    } catch (bcryptErr) {
+      console.error('bcrypt.compare failed', bcryptErr?.message);
+      return res.status(500).json({ error: 'Login temporarily unavailable. Please try again.' });
+    }
+
+    if (!ok) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    let token;
+    try {
+      token = generateToken(user);
+    } catch (tokenErr) {
+      console.error('generateToken failed', tokenErr?.message);
+      return res.status(500).json({ error: 'Login temporarily unavailable. Please try again.' });
+    }
+
     let session = null;
-    try { session = await createSession(user.id, req); } catch (e) { console.error(e?.message); }
-    return res.json({ success: true, data: { user: publicUser(user), token, sessionId: session?.id || null } });
+    try {
+      session = await createSession(user.id, req);
+    } catch (e) {
+      console.error('session create on login', e?.message);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        user: publicUser(user),
+        token,
+        sessionId: session?.id || null,
+      },
+    });
   } catch (err) {
     console.error('login error:', err);
-    return res.status(500).json({ error: 'Login failed' });
+    return res.status(500).json({
+      error: 'Login temporarily unavailable. Please try again.',
+      code: 'LOGIN_ERROR',
+    });
   }
 });
 
