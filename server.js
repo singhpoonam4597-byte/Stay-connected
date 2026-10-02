@@ -30,18 +30,15 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 const app = express();
 const httpServer = createServer(app);
 
-// Comma-separated list supported, e.g. https://a.vercel.app,https://b.vercel.app
 const FRONTEND_URLS = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
   .map((s) => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
 const corsOrigin = (origin, cb) => {
-  // Allow non-browser tools (no Origin) and listed frontends
   if (!origin || FRONTEND_URLS.includes(origin)) {
     return cb(null, true);
   }
-  // Also allow any *.vercel.app preview while launching (tighten later)
   if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) {
     return cb(null, true);
   }
@@ -77,7 +74,7 @@ app.use(
     origin: corsOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Id'],
     optionsSuccessStatus: 200,
   })
 );
@@ -91,25 +88,34 @@ if (process.env.NODE_ENV === 'development') {
 
 const generalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-  message: 'Too many requests from this IP, please try again later.',
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10),
+  message: {
+    error: 'Too many requests. Please wait a moment and try again.',
+    code: 'RATE_LIMITED',
+  },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: 'Too many authentication attempts, please try again later.',
+  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '60', 10),
+  message: {
+    error: 'Too many sign-in attempts. Please wait a few minutes and try again.',
+    code: 'AUTH_RATE_LIMITED',
+  },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === 'development',
+  skipSuccessfulRequests: true,
 });
 
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 50,
-  message: 'Too many file uploads, please try again later.',
+  message: {
+    error: 'Too many file uploads, please try again later.',
+    code: 'UPLOAD_RATE_LIMITED',
+  },
 });
 
 app.use('/api/', generalLimiter);
