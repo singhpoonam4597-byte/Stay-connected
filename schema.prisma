@@ -146,7 +146,9 @@ model Message {
 
   @@index([senderId])
   @@index([conversationId])
+  @@index([conversationId, createdAt])
   @@index([groupId])
+  @@index([groupId, createdAt])
   @@index([replyToId])
   @@index([createdAt])
   @@index([isPinned])
