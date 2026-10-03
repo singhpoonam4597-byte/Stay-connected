@@ -594,68 +594,81 @@ router.delete('/:groupId/members/:memberId', authenticateToken, requireGroupAdmi
 router.get('/:groupId/messages', authenticateToken, requireGroupMembership, async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { limit = 50, offset = 0 } = req.query;
+    const take = Math.min(parseInt(req.query.limit, 10) || 40, 80);
+    const before = req.query.before ? new Date(String(req.query.before)) : null;
+
+    const where = {
+      groupId,
+      isDeleted: false,
+      ...(before && !Number.isNaN(before.getTime())
+        ? { createdAt: { lt: before } }
+        : {}),
+    };
 
     const messages = await prisma.message.findMany({
-      where: { groupId },
-      include: {
+      where,
+      select: {
+        id: true,
+        content: true,
+        senderId: true,
+        groupId: true,
+        conversationId: true,
+        replyToId: true,
+        isDeleted: true,
+        isEdited: true,
+        isPinned: true,
+        createdAt: true,
+        updatedAt: true,
         sender: {
           select: {
             id: true,
             username: true,
             displayName: true,
-            avatar: true
-          }
+            avatar: true,
+            avatarColor: true,
+          },
         },
         replyTo: {
           select: {
             id: true,
             content: true,
-            sender: {
-              select: { displayName: true }
-            }
-          }
+            isDeleted: true,
+            sender: { select: { displayName: true } },
+          },
         },
-        reactions: {
-          include: {
-            user: {
-              select: { id: true, displayName: true }
-            }
-          }
+        reactions: { select: { id: true, emoji: true, userId: true } },
+        attachments: {
+          select: {
+            id: true,
+            url: true,
+            type: true,
+            mimeType: true,
+            fileName: true,
+            fileSize: true,
+          },
         },
-        attachments: true
       },
       orderBy: { createdAt: 'desc' },
-      take: Math.min(parseInt(limit) || 50, 100),
-      skip: Math.max(parseInt(offset) || 0, 0)
+      take,
     });
 
-    const total = await prisma.message.count({
-      where: { groupId }
-    });
-
+    const chronological = messages.reverse();
     res.status(200).json({
       success: true,
       data: {
-        messages: messages.reverse(),
-        total,
-        limit: Math.min(parseInt(limit) || 50, 100),
-        offset: Math.max(parseInt(offset) || 0, 0)
-      }
+        messages: chronological,
+        limit: take,
+        hasMore: messages.length >= take,
+        nextBefore:
+          chronological.length > 0 ? chronological[0].createdAt : null,
+      },
     });
   } catch (error) {
     console.error('Get group messages error:', error);
-
-    res.status(500).json({
-      error: 'Failed to fetch messages',
-      code: 'FETCH_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to fetch messages', code: 'FETCH_ERROR' });
   }
 });
 
-// ============================================================================
-// LEAVE GROUP ENDPOINT
-// ============================================================================
 
 router.post('/:groupId/leave', authenticateToken, async (req, res) => {
   try {
