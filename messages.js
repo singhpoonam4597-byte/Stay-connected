@@ -86,16 +86,37 @@ async function sendConversationMessage(req, res) {
         conversationId,
         replyToId: replyToId || null,
       },
-      include: {
-        sender: { select: { id: true, username: true, displayName: true, avatar: true } },
-        replyTo: {
+      select: {
+        id: true,
+        content: true,
+        senderId: true,
+        conversationId: true,
+        groupId: true,
+        replyToId: true,
+        isDeleted: true,
+        isEdited: true,
+        isPinned: true,
+        createdAt: true,
+        updatedAt: true,
+        sender: {
           select: {
             id: true,
-            content: true,
-            isDeleted: true,
-            sender: { select: { displayName: true } },
+            username: true,
+            displayName: true,
+            avatar: true,
+            avatarColor: true,
           },
         },
+        replyTo: replyToId
+          ? {
+              select: {
+                id: true,
+                content: true,
+                isDeleted: true,
+                sender: { select: { displayName: true } },
+              },
+            }
+          : false,
         reactions: true,
         attachments: true,
       },
@@ -108,37 +129,45 @@ async function sendConversationMessage(req, res) {
       });
       const full = await prisma.message.findUnique({
         where: { id: message.id },
-        include: {
-          sender: { select: { id: true, username: true, displayName: true, avatar: true } },
-          replyTo: {
+        select: {
+          id: true,
+          content: true,
+          senderId: true,
+          conversationId: true,
+          createdAt: true,
+          sender: {
             select: {
               id: true,
-              content: true,
-              isDeleted: true,
-              sender: { select: { displayName: true } },
+              username: true,
+              displayName: true,
+              avatar: true,
+              avatarColor: true,
             },
           },
-          reactions: true,
           attachments: true,
+          replyTo: true,
+          reactions: true,
         },
       });
       if (full) Object.assign(message, full);
     }
-
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: {
-        lastMessage: trimmed.substring(0, 100),
-        lastMessageAt: new Date(),
-        lastMessageBy: userId,
-      },
-    });
 
     const safe = serializeMessage(message);
     broadcast(req, `conversation:${conversationId}`, 'message:new', {
       message: safe,
       conversationId,
     });
+
+    prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: {
+          lastMessage: trimmed.substring(0, 100),
+          lastMessageAt: new Date(),
+          lastMessageBy: userId,
+        },
+      })
+      .catch((e) => console.error('conversation preview update', e?.message));
 
     res.status(201).json({ success: true, data: { message: safe } });
   } catch (error) {
@@ -233,13 +262,15 @@ async function sendGroupMessage(req, res) {
       if (full) Object.assign(message, full);
     }
 
-    await prisma.group.update({ where: { id: groupId }, data: { updatedAt: new Date() } });
-
     const safe = serializeMessage(message);
     broadcast(req, `group:${groupId}`, 'message:new', {
       message: safe,
       groupId,
     });
+
+    prisma.group
+      .update({ where: { id: groupId }, data: { updatedAt: new Date() } })
+      .catch((e) => console.error('group preview update', e?.message));
 
     res.status(201).json({ success: true, data: { message: safe } });
   } catch (error) {
