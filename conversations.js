@@ -287,16 +287,29 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
     const chronological = messages.reverse().map(serializeMessage);
     const hasMore = messages.length >= take;
 
+    const currentUserId = req.user?.id || req.userId;
+    const conv = req.conversation;
+    const peerLastRead = conv
+      ? conv.user1Id === currentUserId
+        ? conv.user2LastReadAt
+        : conv.user1LastReadAt
+      : null;
+    const withRead = chronological.map((m) => {
+      if (!m || m.senderId !== currentUserId) return { ...m, isRead: false };
+      const seen =
+        peerLastRead &&
+        new Date(m.createdAt).getTime() <= new Date(peerLastRead).getTime();
+      return { ...m, isRead: !!seen };
+    });
+
     res.status(200).json({
       success: true,
       data: {
-        messages: chronological,
+        messages: withRead,
         limit: take,
         hasMore,
-        nextBefore:
-          chronological.length > 0
-            ? chronological[0].createdAt
-            : null,
+        nextBefore: withRead.length > 0 ? withRead[0].createdAt : null,
+        peerLastReadAt: peerLastRead || null,
       },
     });
   } catch (error) {
