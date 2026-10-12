@@ -45,14 +45,7 @@ router.post('/signup', validateSignup, async (req, res) => {
         email,
         username,
         displayName: displayName || username,
-        password: hashedPassword,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-        settings: {
-          create: {
-            theme: 'dark',
-            language: 'en'
-          }
-        }
+        password: hashedPassword
       },
       select: {
         id: true,
@@ -60,41 +53,24 @@ router.post('/signup', validateSignup, async (req, res) => {
         username: true,
         displayName: true,
         avatar: true,
-        isOnline: true,
         createdAt: true
       }
     });
 
+    await prisma.userSettings.create({
+      data: { userId: user.id }
+    });
+
     const token = generateToken(user);
-
-    // Delete any conflicting session token before creating a new one
-    await prisma.sessionToken.deleteMany({
-      where: { token }
-    });
-
-    const sessionToken = await prisma.sessionToken.create({
-      data: {
-        userId: user.id,
-        token: token,
-        deviceName: req.headers['user-agent']?.substring(0, 100),
-        ipAddress: req.ip,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
 
     res.status(201).json({
       success: true,
-      data: {
-        user,
-        token,
-        expiresIn: '7d'
-      }
+      data: { user, token }
     });
   } catch (error) {
     console.error('Signup error:', error);
-
     res.status(500).json({
-      error: 'Signup failed',
+      error: 'Failed to create account',
       code: 'SIGNUP_ERROR'
     });
   }
@@ -109,17 +85,7 @@ router.post('/login', validateLogin, async (req, res) => {
     const { email, password } = req.body;
 
     const user = await prisma.user.findUnique({
-      where: { email },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        displayName: true,
-        avatar: true,
-        password: true,
-        isOnline: true,
-        createdAt: true
-      }
+      where: { email }
     });
 
     if (!user) {
@@ -129,9 +95,8 @@ router.post('/login', validateLogin, async (req, res) => {
       });
     }
 
-    const validPassword = await verifyPassword(password, user.password);
-
-    if (!validPassword) {
+    const valid = await verifyPassword(password, user.password);
+    if (!valid) {
       return res.status(401).json({
         error: 'Invalid email or password',
         code: 'INVALID_CREDENTIALS'
@@ -140,108 +105,59 @@ router.post('/login', validateLogin, async (req, res) => {
 
     const token = generateToken(user);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        isOnline: true,
-        lastActive: new Date()
-      }
-    });
-
-    // Clear existing session token records to prevent P2002 unique constraint failure
-    await prisma.sessionToken.deleteMany({
-      where: {
-        OR: [
-          { token },
-          { userId: user.id }
-        ]
-      }
-    });
-
-    const sessionToken = await prisma.sessionToken.create({
-      data: {
-        userId: user.id,
-        token: token,
-        deviceName: req.headers['user-agent']?.substring(0, 100),
-        ipAddress: req.ip,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
-
-    const { password: _, ...userWithoutPassword } = user;
+    const { password: _, ...safeUser } = user;
 
     res.status(200).json({
       success: true,
-      data: {
-        user: userWithoutPassword,
-        token,
-        expiresIn: '7d'
-      }
+      data: { user: safeUser, token }
     });
   } catch (error) {
     console.error('Login error:', error);
-
     res.status(500).json({
-      error: 'Login failed',
+      error: 'Failed to login',
       code: 'LOGIN_ERROR'
     });
   }
 });
 
 // ============================================================================
-// GET CURRENT USER ENDPOINT
+// ME ENDPOINT
 // ============================================================================
 
 router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: req.userId },
       select: {
         id: true,
         email: true,
         username: true,
         displayName: true,
         avatar: true,
+        avatarColor: true,
         bio: true,
-        isPrivate: true,
-        isVerified: true,
         isOnline: true,
         lastSeen: true,
-        lastActive: true,
-        createdAt: true,
-        settings: true,
-        _count: {
-          select: {
-            friendships: true,
-            sentConversations: true,
-            groupMemberships: true,
-            notifications: {
-              where: { read: false }
-            }
-          }
-        }
+        createdAt: true
       }
     });
 
     if (!user) {
       return res.status(404).json({
         error: 'User not found',
-        code: 'USER_NOT_FOUND'
+        code: 'NOT_FOUND'
       });
     }
 
     res.status(200).json({
       success: true,
-      data: user
+      data: { user }
     });
   } catch (error) {
-    console.error('Get current user error:', error);
-
+    console.error('Me error:', error);
     res.status(500).json({
-      error: 'Failed to fetch user',
-      code: 'FETCH_ERROR'
+      error: 'Failed to fetch profile',
+      code: 'ME_ERROR'
     });
   }
 });
@@ -252,182 +168,91 @@ router.get('/me', authenticateToken, async (req, res) => {
 
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (token) {
-      await prisma.sessionToken.deleteMany({
-        where: {
-          userId,
-          token
-        }
-      });
-    }
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        isOnline: false,
-        lastSeen: new Date()
-      }
-    });
-
     res.status(200).json({
       success: true,
-      message: 'Logged out successfully'
+      message: 'Logged out'
     });
   } catch (error) {
     console.error('Logout error:', error);
-
     res.status(500).json({
-      error: 'Logout failed',
+      error: 'Failed to logout',
       code: 'LOGOUT_ERROR'
     });
   }
 });
 
 // ============================================================================
-// REFRESH TOKEN ENDPOINT
+// REFRESH ENDPOINT
 // ============================================================================
 
 router.post('/refresh', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: req.userId },
       select: {
         id: true,
         email: true,
-        username: true
+        username: true,
+        displayName: true,
+        avatar: true
       }
     });
 
     if (!user) {
       return res.status(404).json({
         error: 'User not found',
-        code: 'USER_NOT_FOUND'
+        code: 'NOT_FOUND'
       });
     }
 
-    const newToken = generateToken(user);
-
-    const oldAuthHeader = req.headers['authorization'];
-    const oldToken = oldAuthHeader && oldAuthHeader.split(' ')[1];
-
-    await prisma.sessionToken.deleteMany({
-      where: {
-        OR: [
-          { token: newToken },
-          { userId, token: oldToken }
-        ]
-      }
-    });
-
-    await prisma.sessionToken.create({
-      data: {
-        userId,
-        token: newToken,
-        deviceName: req.headers['user-agent']?.substring(0, 100),
-        ipAddress: req.ip,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      }
-    });
+    const token = generateToken(user);
 
     res.status(200).json({
       success: true,
-      data: {
-        token: newToken,
-        expiresIn: '7d'
-      }
+      data: { token, user }
     });
   } catch (error) {
-    console.error('Token refresh error:', error);
-
+    console.error('Refresh error:', error);
     res.status(500).json({
-      error: 'Token refresh failed',
+      error: 'Failed to refresh token',
       code: 'REFRESH_ERROR'
     });
   }
 });
 
 // ============================================================================
-// GET ALL SESSIONS ENDPOINT
+// SESSIONS
 // ============================================================================
 
 router.get('/sessions', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-
     const sessions = await prisma.sessionToken.findMany({
-      where: { userId },
-      select: {
-        id: true,
-        deviceName: true,
-        ipAddress: true,
-        lastUsedAt: true,
-        createdAt: true,
-        expiresAt: true
-      },
-      orderBy: { lastUsedAt: 'desc' }
+      where: { userId: req.userId },
+      orderBy: { lastUsedAt: 'desc' },
+      take: 50
     });
 
     res.status(200).json({
       success: true,
-      data: {
-        sessions,
-        count: sessions.length
-      }
+      data: { sessions }
     });
   } catch (error) {
-    console.error('Get sessions error:', error);
-
+    console.error('Sessions error:', error);
     res.status(500).json({
       error: 'Failed to fetch sessions',
-      code: 'FETCH_ERROR'
+      code: 'SESSIONS_ERROR'
     });
   }
 });
 
-// ============================================================================
-// REVOKE SESSION ENDPOINT
-// ============================================================================
-
 router.delete('/sessions/:sessionId', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-    const { sessionId } = req.params;
-
-    const session = await prisma.sessionToken.findUnique({
-      where: { id: sessionId }
+    await prisma.sessionToken.deleteMany({
+      where: { id: req.params.sessionId, userId: req.userId }
     });
-
-    if (!session) {
-      return res.status(404).json({
-        error: 'Session not found',
-        code: 'NOT_FOUND'
-      });
-    }
-
-    if (session.userId !== userId) {
-      return res.status(403).json({
-        error: 'You can only revoke your own sessions',
-        code: 'NOT_AUTHORIZED'
-      });
-    }
-
-    await prisma.sessionToken.delete({
-      where: { id: sessionId }
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Session revoked'
-    });
+    res.status(200).json({ success: true, message: 'Session revoked' });
   } catch (error) {
     console.error('Revoke session error:', error);
-
     res.status(500).json({
       error: 'Failed to revoke session',
       code: 'REVOKE_ERROR'
@@ -435,33 +260,14 @@ router.delete('/sessions/:sessionId', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================================================
-// REVOKE ALL SESSIONS ENDPOINT
-// ============================================================================
-
 router.delete('/sessions', authenticateToken, async (req, res) => {
   try {
-    const userId = req.userId;
-
     await prisma.sessionToken.deleteMany({
-      where: { userId }
+      where: { userId: req.userId }
     });
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        isOnline: false,
-        lastSeen: new Date()
-      }
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'All sessions revoked'
-    });
+    res.status(200).json({ success: true, message: 'All sessions revoked' });
   } catch (error) {
     console.error('Revoke all sessions error:', error);
-
     res.status(500).json({
       error: 'Failed to revoke sessions',
       code: 'REVOKE_ERROR'
@@ -470,3 +276,31 @@ router.delete('/sessions', authenticateToken, async (req, res) => {
 });
 
 export default router;
+
+// Named exports for route modules that import middleware from auth.js
+export { authenticateToken } from './jwt.js';
+
+export async function requireConversationAccess(req, res, next) {
+  try {
+    const userId = req.userId || req.user?.id;
+    const conversationId = req.params.conversationId;
+    if (!userId || !conversationId) {
+      return res.status(400).json({ error: 'Missing conversation or user', code: 'BAD_REQUEST' });
+    }
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { user1Id: true, user2Id: true },
+    });
+    if (!conv) {
+      return res.status(404).json({ error: 'Conversation not found', code: 'NOT_FOUND' });
+    }
+    if (conv.user1Id !== userId && conv.user2Id !== userId) {
+      return res.status(403).json({ error: 'Not a participant', code: 'FORBIDDEN' });
+    }
+    req.conversation = conv;
+    next();
+  } catch (err) {
+    console.error('requireConversationAccess', err);
+    return res.status(500).json({ error: 'Access check failed', code: 'ACCESS_ERROR' });
+  }
+}
