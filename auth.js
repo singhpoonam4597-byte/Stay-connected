@@ -1,6 +1,6 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { prisma } from './server.js';
+import { prisma } from './prisma.js';
 import { hashPassword, verifyPassword } from './passwords.js';
 import { generateToken } from './jwt.js';
 import { validateSignup, validateLogin } from './validation.js';
@@ -162,10 +162,6 @@ router.get('/me', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================================================
-// LOGOUT ENDPOINT
-// ============================================================================
-
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
     res.status(200).json({
@@ -180,10 +176,6 @@ router.post('/logout', authenticateToken, async (req, res) => {
     });
   }
 });
-
-// ============================================================================
-// REFRESH ENDPOINT
-// ============================================================================
 
 router.post('/refresh', authenticateToken, async (req, res) => {
   try {
@@ -219,10 +211,6 @@ router.post('/refresh', authenticateToken, async (req, res) => {
     });
   }
 });
-
-// ============================================================================
-// SESSIONS
-// ============================================================================
 
 router.get('/sessions', authenticateToken, async (req, res) => {
   try {
