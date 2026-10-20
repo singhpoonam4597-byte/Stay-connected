@@ -8,7 +8,8 @@ function getSecret() {
   return secret;
 }
 
-const JWT_EXPIRY = process.env.JWT_EXPIRY || '15m';
+// 7 days — short 15m tokens caused sudden logouts mid-chat
+const JWT_EXPIRY = process.env.JWT_EXPIRY || '7d';
 
 export function generateToken(user) {
   return jwt.sign(
