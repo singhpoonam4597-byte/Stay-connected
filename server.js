@@ -5,7 +5,6 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
-import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 
 import authRoutes from './authRoutes.js';
@@ -19,6 +18,8 @@ import { authenticateToken } from './jwt.js';
 import { errorHandler } from './errorHandler.js';
 import { initChatHandler } from './chatHandler.js';
 import { initPresenceHandler } from './presenceHandler.js';
+import { prisma } from './prisma.js';
+import { rateLimit as memLimit } from './scale.js';
 
 dotenv.config();
 
@@ -54,20 +55,24 @@ const io = new SocketIOServer(httpServer, {
   path: process.env.SOCKET_PATH || '/socket.io',
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
-  pingTimeout: 60000,
+  pingTimeout: 20000,
+  maxHttpBufferSize: 1e6,
+  connectTimeout: 20000,
+  perMessageDeflate: false,
+  httpCompression: true,
+  allowEIO3: false,
 });
 
 app.set('io', io);
+app.set('trust proxy', 1);
 
-export const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-});
-
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ limit: '2mb', extended: true }));
 
 app.use(
   cors({
@@ -88,7 +93,7 @@ if (process.env.NODE_ENV === 'development') {
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  max: 2000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later', code: 'RATE_LIMIT' },
@@ -96,18 +101,34 @@ const generalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 40,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many attempts. Please try again in 15 minutes.', code: 'AUTH_RATE_LIMIT' },
+  message: {
+    error: 'Too many attempts. Please try again in 15 minutes.',
+    code: 'AUTH_RATE_LIMIT',
+  },
 });
 
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: 80,
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+function messageSendLimiter(req, res, next) {
+  const uid = req.userId || req.user?.id || req.ip;
+  const r = memLimit(`msg:${uid}`, { limit: 60, windowMs: 60_000 });
+  if (!r.ok) {
+    return res.status(429).json({
+      error: 'Sending too fast. Please wait a moment.',
+      code: 'MSG_RATE_LIMIT',
+      retryAfterMs: r.retryAfterMs,
+    });
+  }
+  next();
+}
 
 app.use('/api/', generalLimiter);
 
@@ -118,6 +139,7 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV,
     uptime: process.uptime(),
     allowedFrontends: FRONTEND_URLS,
+    connections: io.engine?.clientsCount ?? null,
   });
 });
 
@@ -126,7 +148,7 @@ app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
 
 app.use('/api/users', authenticateToken, userRoutes);
-app.use('/api/messages', authenticateToken, messageRoutes);
+app.use('/api/messages', authenticateToken, messageSendLimiter, messageRoutes);
 app.use('/api/conversations', authenticateToken, conversationRoutes);
 app.use('/api/groups', authenticateToken, groupRoutes);
 app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
@@ -156,13 +178,12 @@ initChatHandler(io, prisma);
 initPresenceHandler(io, prisma);
 
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.userId} (${socket.id})`);
-  // Personal room — receive DMs even before joining a conversation room
+  console.log(`User connected: ${socket.userId} (${socket.id}) clients=${io.engine?.clientsCount}`);
   if (socket.userId) {
     socket.join(`user:${socket.userId}`);
   }
-  socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.userId} (${socket.id})`);
+  socket.on('disconnect', (reason) => {
+    console.log(`User disconnected: ${socket.userId} (${socket.id}) reason=${reason}`);
   });
 });
 
@@ -181,29 +202,29 @@ const HOST = '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
   console.log('='.repeat(50));
-  console.log('Connect backend started');
+  console.log('Connect backend started (scale-ready single instance)');
   console.log(`Listening on ${HOST}:${PORT}`);
   console.log(`FRONTEND_URLS: ${FRONTEND_URLS.join(', ')}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
   console.log('='.repeat(50));
 });
 
-process.on('SIGINT', async () => {
+async function shutdown(signal) {
+  console.log(`${signal} received — shutting down`);
   httpServer.close(async () => {
-    await prisma.$disconnect();
+    try {
+      await prisma.$disconnect();
+    } catch (_) {}
     process.exit(0);
   });
-});
+  setTimeout(() => process.exit(1), 10000).unref?.();
+}
 
-process.on('SIGTERM', async () => {
-  httpServer.close(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
-  });
-});
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
 
-export { app, httpServer, io };
+export { app, httpServer, io, prisma };
