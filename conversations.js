@@ -146,101 +146,95 @@ router.post('/:conversationId/unarchive', authenticateToken, requireConversation
   }
 });
 
-// GET MESSAGES — 3-level fallback, always HTTP 200 (never 500)
+// GET MESSAGES — simplest reliable query
 router.get('/:conversationId/messages', authenticateToken, requireConversationAccess, async (req, res) => {
   const { conversationId } = req.params;
-  const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 100);
+  const limit = Math.min(parseInt(String(req.query.limit || '80'), 10) || 80, 100);
   const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
   const currentUserId = req.userId;
 
-  const ok = (messages, extra = {}) =>
-    res.status(200).json({
-      success: true,
-      data: {
-        messages: Array.isArray(messages) ? messages : [],
-        total: Array.isArray(messages) ? messages.length : 0,
-        limit,
-        offset,
-        ...extra,
-      },
-    });
-
   try {
-    let messages = [];
-
+    let rows = [];
     try {
-      messages = await prisma.message.findMany({
-        where: { conversationId, isDeleted: false },
-        include: {
-          sender: {
-            select: { id: true, username: true, displayName: true, avatar: true, avatarColor: true },
-          },
-          replyTo: {
-            select: { id: true, content: true, sender: { select: { displayName: true } } },
-          },
-          reactions: {
-            include: { user: { select: { id: true, displayName: true } } },
-          },
-          attachments: true,
-        },
-        orderBy: { createdAt: 'desc' },
+      rows = await prisma.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: 'asc' },
         take: limit,
         skip: offset,
       });
-    } catch (e1) {
-      console.error('[messages] full query failed:', e1?.message || e1);
-      try {
-        messages = await prisma.message.findMany({
-          where: { conversationId },
-          include: {
-            sender: { select: { id: true, username: true, displayName: true, avatar: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-          take: limit,
-          skip: offset,
-        });
-        messages = (messages || []).filter((m) => m && m.isDeleted !== true);
-      } catch (e2) {
-        console.error('[messages] minimal query failed:', e2?.message || e2);
-        try {
-          messages = await prisma.message.findMany({
-            where: { conversationId },
-            orderBy: { createdAt: 'desc' },
-            take: limit,
-            skip: offset,
-          });
-          messages = (messages || [])
-            .filter((m) => m && m.isDeleted !== true)
-            .map((m) => ({
-              ...m,
-              sender: { id: m.senderId, displayName: 'User', username: '' },
-            }));
-        } catch (e3) {
-          console.error('[messages] bare query failed:', e3?.message || e3);
-          return ok([], { warning: 'query_failed', detail: String(e3?.message || e3) });
-        }
-      }
+    } catch (e) {
+      console.error('[messages] base query failed:', e?.message || e);
+      return res.status(200).json({
+        success: true,
+        data: { messages: [], total: 0, limit, offset, warning: String(e?.message || e) },
+      });
     }
 
+    rows = (rows || []).filter((m) => m && m.isDeleted !== true);
+
     try {
-      const ids = (messages || []).map((m) => m.id).filter(Boolean);
+      const ids = rows.map((m) => m.id).filter(Boolean);
       if (ids.length && currentUserId) {
         const hidden = await prisma.messageHide.findMany({
           where: { userId: currentUserId, messageId: { in: ids } },
           select: { messageId: true },
         });
         const hideSet = new Set(hidden.map((h) => h.messageId));
-        messages = messages.filter((m) => !hideSet.has(m.id));
+        rows = rows.filter((m) => !hideSet.has(m.id));
       }
     } catch (e) {
-      console.warn('[messages] messageHide skipped:', e?.message);
+      console.warn('[messages] hide filter skipped:', e?.message);
     }
 
-    const ordered = Array.isArray(messages) ? [...messages].reverse() : [];
-    return ok(ordered);
+    const senderIds = [...new Set(rows.map((m) => m.senderId).filter(Boolean))];
+    let senderMap = {};
+    if (senderIds.length) {
+      try {
+        const senders = await prisma.user.findMany({
+          where: { id: { in: senderIds } },
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatar: true,
+            avatarColor: true,
+          },
+        });
+        senderMap = Object.fromEntries(senders.map((s) => [s.id, s]));
+      } catch (e) {
+        console.warn('[messages] sender lookup skipped:', e?.message);
+      }
+    }
+
+    const messages = rows.map((m) => ({
+      ...m,
+      sender: senderMap[m.senderId] || {
+        id: m.senderId,
+        displayName: 'User',
+        username: '',
+      },
+    }));
+
+    console.log(
+      `[messages] conv=${conversationId} user=${currentUserId} raw=${rows.length} out=${messages.length}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: { messages, total: messages.length, limit, offset },
+    });
   } catch (error) {
     console.error('[messages] unexpected:', error?.message || error);
-    return ok([], { warning: 'unexpected', detail: String(error?.message || error) });
+    return res.status(200).json({
+      success: true,
+      data: {
+        messages: [],
+        total: 0,
+        limit,
+        offset,
+        warning: String(error?.message || error),
+      },
+    });
   }
 });
 
@@ -288,7 +282,7 @@ router.get('/:conversationId/search', authenticateToken, requireConversationAcce
     const q = (req.query.q || '').toString().trim();
     if (!q) return res.status(400).json({ error: 'Query required', code: 'MISSING_QUERY' });
     const messages = await prisma.message.findMany({
-      where: { conversationId, isDeleted: false, content: { contains: q, mode: 'insensitive' } },
+      where: { conversationId, NOT: { isDeleted: true }, content: { contains: q, mode: 'insensitive' } },
       include: { sender: { select: { id: true, displayName: true, username: true } } },
       orderBy: { createdAt: 'desc' },
       take: 50,
