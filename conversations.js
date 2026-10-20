@@ -146,7 +146,7 @@ router.post('/:conversationId/unarchive', authenticateToken, requireConversation
   }
 });
 
-// GET MESSAGES — simplest reliable query
+// GET MESSAGES — simple + attachments
 router.get('/:conversationId/messages', authenticateToken, requireConversationAccess, async (req, res) => {
   const { conversationId } = req.params;
   const limit = Math.min(parseInt(String(req.query.limit || '80'), 10) || 80, 100);
@@ -206,6 +206,27 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       }
     }
 
+    let attMap = {};
+    try {
+      const msgIds = rows.map((m) => m.id).filter(Boolean);
+      if (msgIds.length) {
+        const atts = await prisma.attachment.findMany({
+          where: { messageId: { in: msgIds } },
+        });
+        for (const a of atts || []) {
+          if (!a.messageId) continue;
+          if (!attMap[a.messageId]) attMap[a.messageId] = [];
+          attMap[a.messageId].push({
+            ...a,
+            fileSize:
+              typeof a.fileSize === 'bigint' ? Number(a.fileSize) : a.fileSize,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[messages] attachments lookup skipped:', e?.message);
+    }
+
     const messages = rows.map((m) => ({
       ...m,
       sender: senderMap[m.senderId] || {
@@ -213,10 +234,11 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
         displayName: 'User',
         username: '',
       },
+      attachments: attMap[m.id] || [],
     }));
 
     console.log(
-      `[messages] conv=${conversationId} user=${currentUserId} raw=${rows.length} out=${messages.length}`
+      `[messages] conv=${conversationId} user=${currentUserId} msgs=${messages.length} withAtt=${messages.filter((m) => m.attachments?.length).length}`
     );
 
     return res.status(200).json({

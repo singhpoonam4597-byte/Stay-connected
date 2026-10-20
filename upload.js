@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { prisma } from './server.js';
+import { prisma } from './prisma.js';
 
 const router = express.Router();
 
