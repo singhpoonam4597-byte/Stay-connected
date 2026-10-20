@@ -1,3 +1,5 @@
+import { rateLimit } from './scale.js';
+
 export const initChatHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
     const userId = socket.userId;
@@ -39,6 +41,11 @@ export const initChatHandler = (io, prismaClient) => {
 
     socket.on('send:message', async (data) => {
       try {
+        const rl = rateLimit(`sockmsg:${userId}`, { limit: 60, windowMs: 60_000 });
+        if (!rl.ok) {
+          socket.emit('error', { message: 'Sending too fast. Please wait.', code: 'MSG_RATE_LIMIT' });
+          return;
+        }
         const { conversationId, groupId, content, replyToId } = data;
 
         if (!content || content.trim().length === 0) {
