@@ -81,47 +81,38 @@ app.use(
 
 if (process.env.NODE_ENV === 'development') {
   app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    console.log(`${req.method} ${req.path}`);
     next();
   });
 }
 
 const generalLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10),
-  message: {
-    error: 'Too many requests. Please wait a moment and try again.',
-    code: 'RATE_LIMITED',
-  },
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later', code: 'RATE_LIMIT' },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '60', 10),
-  message: {
-    error: 'Too many sign-in attempts. Please wait a few minutes and try again.',
-    code: 'AUTH_RATE_LIMITED',
-  },
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
+  message: { error: 'Too many attempts. Please try again in 15 minutes.', code: 'AUTH_RATE_LIMIT' },
 });
 
 const uploadLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 50,
-  message: {
-    error: 'Too many file uploads, please try again later.',
-    code: 'UPLOAD_RATE_LIMITED',
-  },
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 app.use('/api/', generalLimiter);
 
 app.get('/health', (req, res) => {
-  res.json({
+  res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
@@ -166,6 +157,10 @@ initPresenceHandler(io, prisma);
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.userId} (${socket.id})`);
+  // Personal room — receive DMs even before joining a conversation room
+  if (socket.userId) {
+    socket.join(`user:${socket.userId}`);
+  }
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.userId} (${socket.id})`);
   });
