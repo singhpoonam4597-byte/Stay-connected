@@ -1,7 +1,10 @@
 /**
- * Presence + typing — in-memory only (no TypingStatus table writes).
- * Online/offline is scoped to rooms the socket has joined, not global io.emit.
+ * Presence + typing — mostly in-memory.
+ * Online/offline DB writes are throttled so hundreds of connects
+ * do not hammer Postgres.
  */
+
+import { shouldWrite, rateLimit } from './scale.js';
 
 export const initPresenceHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
@@ -9,7 +12,6 @@ export const initPresenceHandler = (io, prismaClient) => {
     const userEmail = socket.userEmail;
     const username = socket.username;
 
-    // Private room for this user (for targeted events later)
     socket.join(`user:${userId}`);
 
     const emitToJoinedRooms = (event, payload) => {
@@ -20,32 +22,32 @@ export const initPresenceHandler = (io, prismaClient) => {
       }
     };
 
-    // —— USER ONLINE ——
-    socket.on('user:online', async () => {
-      try {
-        await prismaClient.user.update({
+    const markOnline = () => {
+      if (!shouldWrite(`online:${userId}`, 45_000)) return;
+      prismaClient.user
+        .update({
           where: { id: userId },
           data: { isOnline: true, lastActive: new Date() },
-        });
+        })
+        .catch(() => {});
+    };
 
-        emitToJoinedRooms('user:online', {
-          userId,
-          username,
-          timestamp: new Date(),
-        });
-      } catch (error) {
-        console.error('User online error:', error);
-      }
+    socket.on('user:online', () => {
+      markOnline();
+      emitToJoinedRooms('user:online', {
+        userId,
+        username,
+        timestamp: new Date(),
+      });
     });
 
-    // —— TYPING START (no DB) ——
     socket.on('typing:start', (data = {}) => {
       try {
+        const r = rateLimit(`typing:${userId}`, { limit: 8, windowMs: 5_000 });
+        if (!r.ok) return;
+
         const { conversationId, groupId } = data;
-        if (!conversationId && !groupId) {
-          socket.emit('error', { message: 'Conversation or group ID is required' });
-          return;
-        }
+        if (!conversationId && !groupId) return;
         const roomId = conversationId
           ? `conversation:${conversationId}`
           : `group:${groupId}`;
@@ -61,12 +63,10 @@ export const initPresenceHandler = (io, prismaClient) => {
       }
     });
 
-    // —— TYPING STOP (no DB) ——
     socket.on('typing:stop', (data = {}) => {
       try {
         const { conversationId, groupId } = data;
         if (!conversationId && !groupId) return;
-
         const roomId = conversationId
           ? `conversation:${conversationId}`
           : `group:${groupId}`;
@@ -81,7 +81,6 @@ export const initPresenceHandler = (io, prismaClient) => {
       }
     });
 
-    // —— ACTIVE USERS IN ROOM ——
     socket.on('get:active-users', async (data = {}) => {
       try {
         const { conversationId, groupId } = data;
@@ -100,7 +99,7 @@ export const initPresenceHandler = (io, prismaClient) => {
             },
           });
           if (conversation) {
-            onlineUsers = [conversation.user1, conversation.user2].filter((u) => u.isOnline);
+            onlineUsers = [conversation.user1, conversation.user2].filter((u) => u?.isOnline);
           }
         } else if (groupId) {
           const group = await prismaClient.group.findUnique({
@@ -116,7 +115,7 @@ export const initPresenceHandler = (io, prismaClient) => {
             },
           });
           if (group) {
-            onlineUsers = group.members.map((m) => m.user).filter((u) => u.isOnline);
+            onlineUsers = group.members.map((m) => m.user).filter((u) => u?.isOnline);
           }
         }
 
@@ -127,11 +126,9 @@ export const initPresenceHandler = (io, prismaClient) => {
         });
       } catch (error) {
         console.error('Get active users error:', error);
-        socket.emit('error', { message: 'Failed to fetch active users' });
       }
     });
 
-    // Typing users are ephemeral — clients track from socket events; empty list on query
     socket.on('get:typing-users', (data = {}) => {
       socket.emit('typing:users', {
         users: [],
@@ -140,7 +137,6 @@ export const initPresenceHandler = (io, prismaClient) => {
       });
     });
 
-    // —— READ RECEIPT (room-scoped) ——
     socket.on('message:read', (data = {}) => {
       try {
         const { messageId, conversationId, groupId } = data;
@@ -162,22 +158,20 @@ export const initPresenceHandler = (io, prismaClient) => {
       }
     });
 
-    // —— STATUS UPDATE (scoped) ——
     socket.on('user:status-update', async (data = {}) => {
       try {
         const { status } = data;
         const validStatuses = ['online', 'idle', 'away', 'offline'];
-        if (!validStatuses.includes(status)) {
-          socket.emit('error', { message: 'Invalid status' });
-          return;
-        }
+        if (!validStatuses.includes(status)) return;
 
         if (status !== 'offline') {
-          await prismaClient.user.update({
-            where: { id: userId },
-            data: { isOnline: true, lastActive: new Date() },
-          });
-        } else {
+          if (shouldWrite(`online:${userId}`, 45_000)) {
+            await prismaClient.user.update({
+              where: { id: userId },
+              data: { isOnline: true, lastActive: new Date() },
+            });
+          }
+        } else if (shouldWrite(`offline:${userId}`, 30_000)) {
           await prismaClient.user.update({
             where: { id: userId },
             data: { isOnline: false, lastSeen: new Date() },
@@ -192,7 +186,6 @@ export const initPresenceHandler = (io, prismaClient) => {
         });
       } catch (error) {
         console.error('Status update error:', error);
-        socket.emit('error', { message: 'Failed to update status' });
       }
     });
 
@@ -203,20 +196,19 @@ export const initPresenceHandler = (io, prismaClient) => {
       timestamp: new Date(),
     });
 
-    // Mark online in DB; do NOT global-broadcast
-    prismaClient.user
-      .update({
-        where: { id: userId },
-        data: { isOnline: true, lastActive: new Date() },
-      })
-      .catch(() => {});
+    markOnline();
 
     socket.on('disconnect', async () => {
       try {
-        await prismaClient.user.update({
-          where: { id: userId },
-          data: { isOnline: false, lastSeen: new Date() },
-        });
+        const room = io.sockets.adapter.rooms.get(`user:${userId}`);
+        if (room && room.size > 0) return;
+
+        if (shouldWrite(`offline:${userId}`, 15_000)) {
+          await prismaClient.user.update({
+            where: { id: userId },
+            data: { isOnline: false, lastSeen: new Date() },
+          });
+        }
 
         emitToJoinedRooms('user:offline', {
           userId,
