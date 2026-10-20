@@ -4,10 +4,16 @@ import { authenticateToken } from './auth.js';
 
 const router = express.Router();
 
-function broadcast(req, room, event, payload) {
+function broadcast(req, room, event, payload, alsoUserIds = []) {
   try {
     const io = req.app.get('io');
-    if (io) io.to(room).emit(event, payload);
+    if (!io) return;
+    if (room) io.to(room).emit(event, payload);
+    // Also push to each participant's personal room so they get it
+    // even if they have not joined the conversation room yet.
+    for (const uid of alsoUserIds || []) {
+      if (uid) io.to(`user:${uid}`).emit(event, payload);
+    }
   } catch (e) {
     console.error('Socket broadcast failed:', e?.message || e);
   }
@@ -78,7 +84,7 @@ async function sendConversationMessage(req, res) {
       }
     }
 
-    const trimmed = hasText ? String(content).trim() : (hasAttachments ? '📷 Photo' : '');
+    const trimmed = hasText ? String(content).trim() : (hasAttachments ? 'Photo' : '');
     const message = await prisma.message.create({
       data: {
         content: trimmed,
@@ -153,10 +159,13 @@ async function sendConversationMessage(req, res) {
     }
 
     const safe = serializeMessage(message);
-    broadcast(req, `conversation:${conversationId}`, 'message:new', {
-      message: safe,
-      conversationId,
-    });
+    broadcast(
+      req,
+      `conversation:${conversationId}`,
+      'message:new',
+      { message: safe, conversationId },
+      [userId, otherId]
+    );
 
     prisma.conversation
       .update({
@@ -215,7 +224,7 @@ async function sendGroupMessage(req, res) {
       }
     }
 
-    const trimmed = hasText ? String(content).trim() : (hasAttachments ? '📷 Photo' : '');
+    const trimmed = hasText ? String(content).trim() : (hasAttachments ? 'Photo' : '');
     const message = await prisma.message.create({
       data: {
         content: trimmed,
@@ -263,10 +272,8 @@ async function sendGroupMessage(req, res) {
     }
 
     const safe = serializeMessage(message);
-    broadcast(req, `group:${groupId}`, 'message:new', {
-      message: safe,
-      groupId,
-    });
+    const memberIds = (group.members || []).map((m) => m.userId).filter(Boolean);
+    broadcast(req, `group:${groupId}`, 'message:new', { message: safe, groupId }, memberIds);
 
     prisma.group
       .update({ where: { id: groupId }, data: { updatedAt: new Date() } })
