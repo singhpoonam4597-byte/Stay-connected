@@ -1,6 +1,9 @@
 export const initChatHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
     const userId = socket.userId;
+    if (userId) {
+      socket.join(`user:${userId}`);
+    }
 
     socket.on('join:conversation', async (conversationId) => {
       try {
@@ -93,10 +96,12 @@ export const initChatHandler = (io, prismaClient) => {
             },
           });
 
-          io.to(`conversation:${conversationId}`).emit('message:new', {
-            message,
-            conversationId,
-          });
+          const otherId =
+            conversation.user1Id === userId ? conversation.user2Id : conversation.user1Id;
+          const payload = { message, conversationId };
+          io.to(`conversation:${conversationId}`).emit('message:new', payload);
+          io.to(`user:${userId}`).emit('message:new', payload);
+          if (otherId) io.to(`user:${otherId}`).emit('message:new', payload);
         } else if (groupId) {
           const group = await prismaClient.group.findUnique({
             where: { id: groupId },
@@ -135,10 +140,11 @@ export const initChatHandler = (io, prismaClient) => {
             data: { updatedAt: new Date() },
           });
 
-          io.to(`group:${groupId}`).emit('message:new', {
-            message,
-            groupId,
-          });
+          const payload = { message, groupId };
+          io.to(`group:${groupId}`).emit('message:new', payload);
+          for (const m of group.members || []) {
+            if (m.userId) io.to(`user:${m.userId}`).emit('message:new', payload);
+          }
         }
 
         if (message) {
@@ -200,7 +206,6 @@ export const initChatHandler = (io, prismaClient) => {
       }
     });
 
-    // Soft-delete
     socket.on('delete:message', async (data) => {
       try {
         const { messageId } = data;
