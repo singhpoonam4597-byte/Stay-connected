@@ -4,6 +4,31 @@ import { authenticateToken, requireConversationAccess } from './auth.js';
 
 const router = express.Router();
 
+async function attachUnreadCounts(conversations, currentUserId) {
+  if (!conversations?.length) return conversations || [];
+  const out = [];
+  for (const c of conversations) {
+    try {
+      const isUser1 = c.user1Id === currentUserId;
+      const lastRead = isUser1 ? c.user1LastReadAt : c.user2LastReadAt;
+      const where = {
+        conversationId: c.id,
+        isDeleted: false,
+        senderId: { not: currentUserId },
+      };
+      if (lastRead) {
+        where.createdAt = { gt: lastRead };
+      }
+      const unreadCount = await prisma.message.count({ where });
+      out.push({ ...c, unreadCount });
+    } catch (e) {
+      console.warn('unread count', c.id, e?.message);
+      out.push({ ...c, unreadCount: 0 });
+    }
+  }
+  return out;
+}
+
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const currentUserId = req.userId;
@@ -88,6 +113,9 @@ router.get('/', authenticateToken, async (req, res) => {
         orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
       });
     }
+
+    conversations = await attachUnreadCounts(conversations, currentUserId);
+
     res.status(200).json({ success: true, data: { conversations } });
   } catch (error) {
     console.error('List conversations error:', error);
@@ -146,7 +174,6 @@ router.post('/:conversationId/unarchive', authenticateToken, requireConversation
   }
 });
 
-// GET MESSAGES — newest page first (Telegram-style), then chronological order for UI
 router.get('/:conversationId/messages', authenticateToken, requireConversationAccess, async (req, res) => {
   const { conversationId } = req.params;
   const limit = Math.min(parseInt(String(req.query.limit || '80'), 10) || 80, 100);
@@ -156,21 +183,15 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
   try {
     let rows = [];
     try {
-      // Fetch NEWEST first so open-chat always shows recent history
       rows = await prisma.message.findMany({
-        where: {
-          conversationId,
-          isDeleted: false,
-        },
+        where: { conversationId, isDeleted: false },
         orderBy: { createdAt: 'desc' },
         take: limit,
         skip: offset,
       });
-      // Reverse to chronological (oldest → newest) for the bubble list
       rows = rows.reverse();
     } catch (e) {
       console.error('[messages] base query failed:', e?.message || e);
-      // Fallback without isDeleted filter if column missing
       try {
         rows = await prisma.message.findMany({
           where: { conversationId },
@@ -180,7 +201,6 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
         });
         rows = (rows || []).filter((m) => m && m.isDeleted !== true).reverse();
       } catch (e2) {
-        console.error('[messages] fallback failed:', e2?.message || e2);
         return res.status(200).json({
           success: true,
           data: { messages: [], total: 0, limit, offset, warning: String(e2?.message || e2) },
@@ -254,10 +274,6 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
       },
       attachments: attMap[m.id] || [],
     }));
-
-    console.log(
-      `[messages] conv=${conversationId} user=${currentUserId} msgs=${messages.length} withAtt=${messages.filter((m) => m.attachments?.length).length}`
-    );
 
     return res.status(200).json({
       success: true,
