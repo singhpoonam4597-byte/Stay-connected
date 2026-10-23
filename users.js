@@ -183,7 +183,7 @@ router.get('/:userId', checkNotBlocked, async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.user?.id || req.userId;
-    const user = await prisma.user.findUnique({
+    let user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true, username: true, displayName: true, avatar: true, avatarColor: true,
@@ -191,6 +191,17 @@ router.get('/:userId', checkNotBlocked, async (req, res) => {
       },
     });
     if (!user) return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+    if (userId !== currentUserId) {
+      try {
+        const s = await prisma.userSettings.findUnique({
+          where: { userId },
+          select: { showOnlineStatus: true },
+        });
+        if (s && s.showOnlineStatus === false) {
+          user = { ...user, isOnline: false, lastSeen: null };
+        }
+      } catch (_) {}
+    }
     res.status(200).json({
       success: true,
       data: { profile: user, isCurrentUser: userId === currentUserId },
