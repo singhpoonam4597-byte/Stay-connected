@@ -146,7 +146,7 @@ router.post('/:conversationId/unarchive', authenticateToken, requireConversation
   }
 });
 
-// GET MESSAGES — simple + attachments
+// GET MESSAGES — newest page first (Telegram-style), then chronological order for UI
 router.get('/:conversationId/messages', authenticateToken, requireConversationAccess, async (req, res) => {
   const { conversationId } = req.params;
   const limit = Math.min(parseInt(String(req.query.limit || '80'), 10) || 80, 100);
@@ -156,18 +156,36 @@ router.get('/:conversationId/messages', authenticateToken, requireConversationAc
   try {
     let rows = [];
     try {
+      // Fetch NEWEST first so open-chat always shows recent history
       rows = await prisma.message.findMany({
-        where: { conversationId },
-        orderBy: { createdAt: 'asc' },
+        where: {
+          conversationId,
+          isDeleted: false,
+        },
+        orderBy: { createdAt: 'desc' },
         take: limit,
         skip: offset,
       });
+      // Reverse to chronological (oldest → newest) for the bubble list
+      rows = rows.reverse();
     } catch (e) {
       console.error('[messages] base query failed:', e?.message || e);
-      return res.status(200).json({
-        success: true,
-        data: { messages: [], total: 0, limit, offset, warning: String(e?.message || e) },
-      });
+      // Fallback without isDeleted filter if column missing
+      try {
+        rows = await prisma.message.findMany({
+          where: { conversationId },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+        });
+        rows = (rows || []).filter((m) => m && m.isDeleted !== true).reverse();
+      } catch (e2) {
+        console.error('[messages] fallback failed:', e2?.message || e2);
+        return res.status(200).json({
+          success: true,
+          data: { messages: [], total: 0, limit, offset, warning: String(e2?.message || e2) },
+        });
+      }
     }
 
     rows = (rows || []).filter((m) => m && m.isDeleted !== true);
