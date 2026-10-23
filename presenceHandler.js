@@ -1,10 +1,22 @@
 /**
  * Presence + typing — mostly in-memory.
- * Online/offline DB writes are throttled so hundreds of connects
- * do not hammer Postgres.
+ * Respects UserSettings.showOnlineStatus.
  */
 
 import { shouldWrite, rateLimit } from './scale.js';
+
+async function canShowOnline(prismaClient, userId) {
+  try {
+    const s = await prismaClient.userSettings.findUnique({
+      where: { userId },
+      select: { showOnlineStatus: true },
+    });
+    if (s && s.showOnlineStatus === false) return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
 
 export const initPresenceHandler = (io, prismaClient) => {
   io.on('connection', (socket) => {
@@ -22,7 +34,19 @@ export const initPresenceHandler = (io, prismaClient) => {
       }
     };
 
-    const markOnline = () => {
+    const markOnline = async () => {
+      const allowed = await canShowOnline(prismaClient, userId);
+      if (!allowed) {
+        if (shouldWrite(`offline:${userId}`, 45_000)) {
+          prismaClient.user
+            .update({
+              where: { id: userId },
+              data: { isOnline: false },
+            })
+            .catch(() => {});
+        }
+        return;
+      }
       if (!shouldWrite(`online:${userId}`, 45_000)) return;
       prismaClient.user
         .update({
@@ -32,8 +56,10 @@ export const initPresenceHandler = (io, prismaClient) => {
         .catch(() => {});
     };
 
-    socket.on('user:online', () => {
-      markOnline();
+    socket.on('user:online', async () => {
+      await markOnline();
+      const allowed = await canShowOnline(prismaClient, userId);
+      if (!allowed) return;
       emitToJoinedRooms('user:online', {
         userId,
         username,
@@ -99,7 +125,12 @@ export const initPresenceHandler = (io, prismaClient) => {
             },
           });
           if (conversation) {
-            onlineUsers = [conversation.user1, conversation.user2].filter((u) => u?.isOnline);
+            const candidates = [conversation.user1, conversation.user2].filter(Boolean);
+            for (const u of candidates) {
+              if (!u.isOnline) continue;
+              if (!(await canShowOnline(prismaClient, u.id))) continue;
+              onlineUsers.push(u);
+            }
           }
         } else if (groupId) {
           const group = await prismaClient.group.findUnique({
@@ -115,7 +146,12 @@ export const initPresenceHandler = (io, prismaClient) => {
             },
           });
           if (group) {
-            onlineUsers = group.members.map((m) => m.user).filter((u) => u?.isOnline);
+            for (const m of group.members || []) {
+              const u = m.user;
+              if (!u?.isOnline) continue;
+              if (!(await canShowOnline(prismaClient, u.id))) continue;
+              onlineUsers.push(u);
+            }
           }
         }
 
@@ -164,17 +200,27 @@ export const initPresenceHandler = (io, prismaClient) => {
         const validStatuses = ['online', 'idle', 'away', 'offline'];
         if (!validStatuses.includes(status)) return;
 
-        if (status !== 'offline') {
-          if (shouldWrite(`online:${userId}`, 45_000)) {
+        const allowed = await canShowOnline(prismaClient, userId);
+        if (!allowed || status === 'offline') {
+          if (shouldWrite(`offline:${userId}`, 30_000)) {
             await prismaClient.user.update({
               where: { id: userId },
-              data: { isOnline: true, lastActive: new Date() },
+              data: { isOnline: false, lastSeen: new Date() },
             });
           }
-        } else if (shouldWrite(`offline:${userId}`, 30_000)) {
+          emitToJoinedRooms('user:status-changed', {
+            userId,
+            username,
+            status: 'offline',
+            timestamp: new Date(),
+          });
+          return;
+        }
+
+        if (shouldWrite(`online:${userId}`, 45_000)) {
           await prismaClient.user.update({
             where: { id: userId },
-            data: { isOnline: false, lastSeen: new Date() },
+            data: { isOnline: true, lastActive: new Date() },
           });
         }
 
@@ -206,7 +252,10 @@ export const initPresenceHandler = (io, prismaClient) => {
         if (shouldWrite(`offline:${userId}`, 15_000)) {
           await prismaClient.user.update({
             where: { id: userId },
-            data: { isOnline: false, lastSeen: new Date() },
+            data: {
+              isOnline: false,
+              lastSeen: new Date(),
+            },
           });
         }
 

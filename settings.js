@@ -1,10 +1,9 @@
 import express from 'express';
-import { prisma } from './server.js';
-import { authenticateToken } from './jwt.js';
+import { prisma } from './prisma.js';
 
 const router = express.Router();
 
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
     let settings = await prisma.userSettings.findUnique({ where: { userId } });
@@ -18,7 +17,7 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-router.patch('/', authenticateToken, async (req, res) => {
+router.patch('/', async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
     const body = req.body || {};
