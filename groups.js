@@ -1,5 +1,5 @@
 import express from 'express';
-import { prisma } from './server.js';
+import { prisma } from './prisma.js';
 import { authenticateToken } from './jwt.js';
 
 const router = express.Router();
@@ -41,27 +41,48 @@ const requireGroupAdmin = async (req, res, next) => {
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
-    const { name, description, isPublic = false, memberIds = [] } = req.body;
-    if (!name || name.trim().length === 0) {
+    const body = req.body || {};
+    const name = body.name;
+    const description = body.description;
+    const isPublic = body.isPublic === true;
+    // Accept several client shapes
+    let memberIds = body.memberIds || body.members || body.userIds || [];
+    if (!Array.isArray(memberIds)) memberIds = [];
+    memberIds = memberIds
+      .map((m) => (typeof m === 'string' ? m : m?.id || m?.userId))
+      .filter((id) => id && id !== userId);
+
+    if (!name || String(name).trim().length === 0) {
       return res.status(400).json({ error: 'Group name is required', code: 'MISSING_NAME' });
     }
-    if (name.length > 100) {
+    if (String(name).length > 100) {
       return res.status(400).json({ error: 'Group name must be less than 100 characters', code: 'NAME_TOO_LONG' });
     }
-    if (description && description.length > 500) {
+    if (description && String(description).length > 500) {
       return res.status(400).json({ error: 'Group description must be less than 500 characters', code: 'DESCRIPTION_TOO_LONG' });
     }
+
+    // Validate members exist
+    if (memberIds.length) {
+      const found = await prisma.user.findMany({
+        where: { id: { in: memberIds } },
+        select: { id: true },
+      });
+      const ok = new Set(found.map((u) => u.id));
+      memberIds = memberIds.filter((id) => ok.has(id));
+    }
+
     const group = await prisma.group.create({
       data: {
-        name: name.trim(),
-        description: description?.trim() || null,
+        name: String(name).trim(),
+        description: description ? String(description).trim() : null,
         createdById: userId,
         isPublic,
-        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${name}`,
+        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(String(name).trim())}`,
         members: {
           create: [
             { userId, role: 'owner' },
-            ...memberIds.filter((id) => id !== userId).map((id) => ({ userId: id, role: 'member' })),
+            ...memberIds.map((id) => ({ userId: id, role: 'member' })),
           ],
         },
       },
@@ -217,7 +238,9 @@ router.delete('/:groupId', authenticateToken, requireGroupAdmin, async (req, res
 router.post('/:groupId/members', authenticateToken, requireGroupAdmin, async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { userId: newMemberId, role = 'member' } = req.body;
+    const body = req.body || {};
+    const newMemberId = body.userId || body.memberId || body.id;
+    const role = body.role || 'member';
     if (!newMemberId) {
       return res.status(400).json({ error: 'User ID is required', code: 'MISSING_USER_ID' });
     }
