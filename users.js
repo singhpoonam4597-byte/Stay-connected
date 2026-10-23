@@ -245,7 +245,7 @@ router.delete('/:userId/block', async (req, res) => {
       where: { blockerId: currentUserId, blockedId: userId },
     });
     if (!blocked) return res.status(404).json({ error: 'User is not blocked' });
-    await prisma.blockedUser.delete({ where: { id: blocked } });
+    await prisma.blockedUser.delete({ where: { id: blocked.id } });
     res.status(200).json({ success: true, message: 'User unblocked' });
   } catch (error) {
     console.error('Unblock user error:', error);
