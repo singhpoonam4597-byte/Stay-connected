@@ -1,5 +1,5 @@
 import express from 'express';
-import { prisma } from './server.js';
+import { prisma } from './prisma.js';
 
 const router = express.Router();
 
@@ -40,7 +40,7 @@ async function getBlockedRelatedIds(currentUserId) {
 
 const publicUserSelect = {
   id: true, username: true, displayName: true, avatar: true, avatarColor: true,
-  bio: true, isVerified: true, isOnline: true,
+  bio: true, isVerified: true, isOnline: true, lastSeen: true,
 };
 
 router.get('/search', async (req, res) => {
@@ -245,7 +245,7 @@ router.delete('/:userId/block', async (req, res) => {
       where: { blockerId: currentUserId, blockedId: userId },
     });
     if (!blocked) return res.status(404).json({ error: 'User is not blocked' });
-    await prisma.blockedUser.delete({ where: { id: blocked.id } });
+    await prisma.blockedUser.delete({ where: { id: blocked } });
     res.status(200).json({ success: true, message: 'User unblocked' });
   } catch (error) {
     console.error('Unblock user error:', error);
