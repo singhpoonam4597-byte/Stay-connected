@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { prisma } from './server.js';
+import { prisma } from './prisma.js';
 import { generateToken, authenticateToken } from './jwt.js';
 
 const router = Router();
@@ -155,6 +155,20 @@ router.post('/login', async (req, res) => {
       error: 'Login temporarily unavailable. Please try again.',
       code: 'LOGIN_ERROR',
     });
+  }
+});
+
+/** Re-issue JWT so long sessions stay alive without forced logout */
+router.post('/refresh', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.userId;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const token = generateToken(user);
+    return res.json({ success: true, data: { token, user: publicUser(user) } });
+  } catch (err) {
+    console.error('refresh error:', err);
+    return res.status(500).json({ error: 'Refresh failed' });
   }
 });
 
