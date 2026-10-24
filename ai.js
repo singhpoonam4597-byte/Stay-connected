@@ -192,3 +192,15 @@ router.post('/chat', aiRateLimit, async (req, res) => {
 
 router.get('/status', async (req, res) => {
   const ready = !!(
+    process.env.GROQ_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.XAI_API_KEY
+  );
+  res.json({
+    success: true,
+    data: { ready, features: ['chat', 'study', 'code'] },
+  });
+});
+
+export default router;
