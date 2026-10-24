@@ -3,6 +3,7 @@
  *
  * Env (Render):
  *   GROQ_API_KEY     preferred (free tier)
+ *   GROQ_MODEL       optional (default: openai/gpt-oss-20b)
  *   GEMINI_API_KEY   optional
  *   OPENAI_API_KEY   optional
  *   XAI_API_KEY      optional
@@ -31,6 +32,15 @@ Prefer clear code blocks and short explanations.
 Never mention underlying model providers.`,
 };
 
+/** Free / public Groq chat models (2026). Llama 3.3 70B is enterprise-only. */
+const GROQ_MODELS = [
+  process.env.GROQ_MODEL,
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+  'llama-3.1-8b-instant',
+  'llama-3.3-70b-versatile',
+].filter(Boolean);
+
 function aiRateLimit(req, res, next) {
   const uid = req.userId || req.user?.id || req.ip;
   const r = memLimit(`ai:${uid}`, { limit: 40, windowMs: 60 * 60 * 1000 });
@@ -46,11 +56,12 @@ function aiRateLimit(req, res, next) {
 
 async function callOpenAICompatible(baseUrl, key, model, messages, system) {
   if (!key) throw new Error('NO_KEY');
+  const cleanKey = String(key).trim();
   const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${cleanKey}`,
     },
     body: JSON.stringify({
       model,
@@ -61,7 +72,8 @@ async function callOpenAICompatible(baseUrl, key, model, messages, system) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error?.message || `AI error ${res.status}`);
+    const msg = data?.error?.message || data?.error || `AI error ${res.status}`;
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
   }
   const text = data?.choices?.[0]?.message?.content || '';
   if (!text.trim()) throw new Error('Empty AI response');
@@ -70,8 +82,27 @@ async function callOpenAICompatible(baseUrl, key, model, messages, system) {
 
 async function callGroq(messages, system) {
   const key = process.env.GROQ_API_KEY;
-  const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-  return callOpenAICompatible('https://api.groq.com/openai/v1', key, model, messages, system);
+  if (!key) throw new Error('NO_KEY');
+
+  let lastErr = null;
+  const tried = new Set();
+  for (const model of GROQ_MODELS) {
+    if (!model || tried.has(model)) continue;
+    tried.add(model);
+    try {
+      return await callOpenAICompatible(
+        'https://api.groq.com/openai/v1',
+        key,
+        model,
+        messages,
+        system
+      );
+    } catch (e) {
+      lastErr = e;
+      console.error(`[ai] groq model ${model} failed:`, e?.message || e);
+    }
+  }
+  throw lastErr || new Error('All Groq models failed');
 }
 
 async function callOpenAI(messages, system) {
@@ -90,7 +121,7 @@ async function callGemini(messages, system) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('NO_KEY');
   const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(String(key).trim())}`;
   const contents = [];
   for (const m of messages) {
     const role = m.role === 'assistant' ? 'model' : 'user';
@@ -183,8 +214,12 @@ router.post('/chat', aiRateLimit, async (req, res) => {
         code: 'AI_NOT_CONFIGURED',
       });
     }
+    // Surface a short safe hint (not the full provider name spam)
+    const hint = String(err?.message || '').slice(0, 120);
     return res.status(502).json({
-      error: 'Connect AI is temporarily unavailable. Try again.',
+      error: hint
+        ? `Connect AI is temporarily unavailable. (${hint})`
+        : 'Connect AI is temporarily unavailable. Try again.',
       code: 'AI_UPSTREAM',
     });
   }
