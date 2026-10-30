@@ -41,16 +41,20 @@ const requireGroupAdmin = async (req, res, next) => {
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.id || req.userId;
-    const body = req.body || {};
-    const name = body.name;
-    const description = body.description;
-    const isPublic = body.isPublic === true;
-    // Accept several client shapes
-    let memberIds = body.memberIds || body.members || body.userIds || [];
-    if (!Array.isArray(memberIds)) memberIds = [];
-    memberIds = memberIds
-      .map((m) => (typeof m === 'string' ? m : m?.id || m?.userId))
-      .filter((id) => id && id !== userId);
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized', code: 'NO_USER' });
+    }
+    const { name, description, isPublic = false } = req.body || {};
+    let rawMembers = req.body?.memberIds ?? req.body?.members ?? req.body?.userIds ?? [];
+    if (!Array.isArray(rawMembers)) rawMembers = [];
+    const memberIds = [
+      ...new Set(
+        rawMembers
+          .map((m) => (typeof m === 'object' && m ? m.id || m.userId : m))
+          .filter((id) => id != null && String(id) !== String(userId))
+          .map((id) => String(id))
+      ),
+    ];
 
     if (!name || String(name).trim().length === 0) {
       return res.status(400).json({ error: 'Group name is required', code: 'MISSING_NAME' });
@@ -61,15 +65,23 @@ router.post('/', authenticateToken, async (req, res) => {
     if (description && String(description).length > 500) {
       return res.status(400).json({ error: 'Group description must be less than 500 characters', code: 'DESCRIPTION_TOO_LONG' });
     }
-
-    // Validate members exist
-    if (memberIds.length) {
-      const found = await prisma.user.findMany({
-        where: { id: { in: memberIds } },
-        select: { id: true },
+    if (memberIds.length === 0) {
+      return res.status(400).json({
+        error: 'Add at least one member to the group',
+        code: 'NO_MEMBERS',
       });
-      const ok = new Set(found.map((u) => u.id));
-      memberIds = memberIds.filter((id) => ok.has(id));
+    }
+
+    const existing = await prisma.user.findMany({
+      where: { id: { in: memberIds } },
+      select: { id: true },
+    });
+    const validIds = existing.map((u) => u.id);
+    if (validIds.length === 0) {
+      return res.status(400).json({
+        error: 'None of the selected members were found',
+        code: 'MEMBERS_NOT_FOUND',
+      });
     }
 
     const group = await prisma.group.create({
@@ -77,78 +89,15 @@ router.post('/', authenticateToken, async (req, res) => {
         name: String(name).trim(),
         description: description ? String(description).trim() : null,
         createdById: userId,
-        isPublic,
-        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(String(name).trim())}`,
+        isPublic: !!isPublic,
         members: {
           create: [
             { userId, role: 'owner' },
-            ...memberIds.map((id) => ({ userId: id, role: 'member' })),
+            ...validIds.map((id) => ({ userId: id, role: 'member' })),
           ],
         },
       },
       include: {
-        members: {
-          include: {
-            user: {
-              select: { id: true, username: true, displayName: true, avatar: true, isOnline: true },
-            },
-          },
-        },
-        createdBy: {
-          select: { id: true, username: true, displayName: true, avatar: true },
-        },
-        _count: { select: { messages: true } },
-      },
-    });
-    res.status(201).json({ success: true, data: { group } });
-  } catch (error) {
-    console.error('Create group error:', error);
-    res.status(500).json({ error: 'Failed to create group', code: 'CREATE_ERROR' });
-  }
-});
-
-router.get('/', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user?.id || req.userId;
-    const { limit = 50, offset = 0 } = req.query;
-    const groups = await prisma.group.findMany({
-      where: { members: { some: { userId } } },
-      include: {
-        createdBy: { select: { id: true, username: true, displayName: true, avatar: true } },
-        members: {
-          include: {
-            user: { select: { id: true, username: true, displayName: true, avatar: true } },
-          },
-        },
-        _count: { select: { messages: true } },
-      },
-      orderBy: { updatedAt: 'desc' },
-      take: Math.min(parseInt(limit) || 50, 100),
-      skip: Math.max(parseInt(offset) || 0, 0),
-    });
-    const total = await prisma.group.count({ where: { members: { some: { userId } } } });
-    res.status(200).json({
-      success: true,
-      data: {
-        groups,
-        total,
-        limit: Math.min(parseInt(limit) || 50, 100),
-        offset: Math.max(parseInt(offset) || 0, 0),
-      },
-    });
-  } catch (error) {
-    console.error('Get groups error:', error);
-    res.status(500).json({ error: 'Failed to fetch groups', code: 'FETCH_ERROR' });
-  }
-});
-
-router.get('/:groupId', authenticateToken, requireGroupMembership, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const group = await prisma.group.findUnique({
-      where: { id: groupId },
-      include: {
-        createdBy: { select: { id: true, username: true, displayName: true, avatar: true } },
         members: {
           include: {
             user: {
@@ -157,251 +106,24 @@ router.get('/:groupId', authenticateToken, requireGroupMembership, async (req, r
                 username: true,
                 displayName: true,
                 avatar: true,
+                avatarColor: true,
                 isOnline: true,
-                isVerified: true,
               },
             },
           },
         },
-        _count: { select: { messages: true } },
-      },
-    });
-    if (!group) {
-      return res.status(404).json({ error: 'Group not found', code: 'NOT_FOUND' });
-    }
-    res.status(200).json({ success: true, data: { group } });
-  } catch (error) {
-    console.error('Get group error:', error);
-    res.status(500).json({ error: 'Failed to fetch group', code: 'FETCH_ERROR' });
-  }
-});
-
-router.patch('/:groupId', authenticateToken, requireGroupAdmin, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const { name, description, isPublic } = req.body;
-    const updateData = {};
-    if (name !== undefined) {
-      if (name.length > 100) {
-        return res.status(400).json({ error: 'Group name must be less than 100 characters', code: 'NAME_TOO_LONG' });
-      }
-      updateData.name = name.trim();
-    }
-    if (description !== undefined) {
-      if (description.length > 500) {
-        return res.status(400).json({
-          error: 'Group description must be less than 500 characters',
-          code: 'DESCRIPTION_TOO_LONG',
-        });
-      }
-      updateData.description = description.trim();
-    }
-    if (isPublic !== undefined) updateData.isPublic = isPublic;
-    const updatedGroup = await prisma.group.update({
-      where: { id: groupId },
-      data: updateData,
-      include: {
-        members: {
-          include: {
-            user: { select: { id: true, username: true, displayName: true, avatar: true } },
-          },
+        createdBy: {
+          select: { id: true, username: true, displayName: true, avatar: true },
         },
-        createdBy: { select: { id: true, username: true, displayName: true } },
-        _count: { select: { messages: true } },
+        _count: { select: { messages: true, members: true } },
       },
     });
-    res.status(200).json({ success: true, data: { group: updatedGroup } });
+    res.status(201).json({ success: true, data: { group } });
   } catch (error) {
-    console.error('Update group error:', error);
-    res.status(500).json({ error: 'Failed to update group', code: 'UPDATE_ERROR' });
-  }
-});
-
-router.delete('/:groupId', authenticateToken, requireGroupAdmin, async (req, res) => {
-  try {
-    const userId = req.user?.id || req.userId;
-    const { groupId } = req.params;
-    const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (group.createdById !== userId) {
-      return res.status(403).json({ error: 'Only the group creator can delete the group', code: 'NOT_AUTHORIZED' });
-    }
-    await prisma.message.deleteMany({ where: { groupId } });
-    await prisma.groupMember.deleteMany({ where: { groupId } });
-    await prisma.group.delete({ where: { id: groupId } });
-    res.status(200).json({ success: true, message: 'Group deleted' });
-  } catch (error) {
-    console.error('Delete group error:', error);
-    res.status(500).json({ error: 'Failed to delete group', code: 'DELETE_ERROR' });
-  }
-});
-
-router.post('/:groupId/members', authenticateToken, requireGroupAdmin, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const body = req.body || {};
-    const newMemberId = body.userId || body.memberId || body.id;
-    const role = body.role || 'member';
-    if (!newMemberId) {
-      return res.status(400).json({ error: 'User ID is required', code: 'MISSING_USER_ID' });
-    }
-    const user = await prisma.user.findUnique({ where: { id: newMemberId }, select: { id: true } });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
-    }
-    const existingMember = await prisma.groupMember.findFirst({ where: { groupId, userId: newMemberId } });
-    if (existingMember) {
-      return res.status(409).json({ error: 'User is already a member of this group', code: 'ALREADY_MEMBER' });
-    }
-    const member = await prisma.groupMember.create({
-      data: {
-        groupId,
-        userId: newMemberId,
-        role: ['member', 'admin', 'owner'].includes(role) ? role : 'member',
-      },
-      include: {
-        user: { select: { id: true, username: true, displayName: true, avatar: true } },
-      },
+    console.error('Create group error:', error);
+    res.status(500).json({
+      error: error?.message || 'Failed to create group',
+      code: 'CREATE_ERROR',
     });
-    res.status(201).json({ success: true, data: { member } });
-  } catch (error) {
-    console.error('Add member error:', error);
-    res.status(500).json({ error: 'Failed to add member', code: 'ADD_ERROR' });
   }
 });
-
-router.patch('/:groupId/members/:memberId', authenticateToken, requireGroupAdmin, async (req, res) => {
-  try {
-    const { groupId, memberId } = req.params;
-    const { role } = req.body;
-    if (!['member', 'admin', 'owner'].includes(role)) {
-      return res.status(400).json({ error: 'Invalid role', code: 'INVALID_ROLE' });
-    }
-    const member = await prisma.groupMember.findFirst({ where: { id: memberId, groupId } });
-    if (!member) {
-      return res.status(404).json({ error: 'Member not found', code: 'NOT_FOUND' });
-    }
-    const updatedMember = await prisma.groupMember.update({
-      where: { id: memberId },
-      data: { role },
-      include: {
-        user: { select: { id: true, username: true, displayName: true, avatar: true } },
-      },
-    });
-    res.status(200).json({ success: true, data: { member: updatedMember } });
-  } catch (error) {
-    console.error('Update member error:', error);
-    res.status(500).json({ error: 'Failed to update member', code: 'UPDATE_ERROR' });
-  }
-});
-
-router.delete('/:groupId/members/:memberId', authenticateToken, requireGroupAdmin, async (req, res) => {
-  try {
-    const { groupId, memberId } = req.params;
-    const member = await prisma.groupMember.findFirst({ where: { id: memberId, groupId } });
-    if (!member) {
-      return res.status(404).json({ error: 'Member not found', code: 'NOT_FOUND' });
-    }
-    await prisma.groupMember.delete({ where: { id: memberId } });
-    res.status(200).json({ success: true, message: 'Member removed from group' });
-  } catch (error) {
-    console.error('Remove member error:', error);
-    res.status(500).json({ error: 'Failed to remove member', code: 'REMOVE_ERROR' });
-  }
-});
-
-router.get('/:groupId/messages', authenticateToken, requireGroupMembership, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const take = Math.min(parseInt(req.query.limit, 10) || 40, 80);
-    const before = req.query.before ? new Date(String(req.query.before)) : null;
-    const where = {
-      groupId,
-      isDeleted: false,
-      ...(before && !Number.isNaN(before.getTime()) ? { createdAt: { lt: before } } : {}),
-    };
-    const messages = await prisma.message.findMany({
-      where,
-      select: {
-        id: true,
-        content: true,
-        senderId: true,
-        groupId: true,
-        conversationId: true,
-        replyToId: true,
-        isDeleted: true,
-        isEdited: true,
-        isPinned: true,
-        createdAt: true,
-        updatedAt: true,
-        sender: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatar: true,
-            avatarColor: true,
-          },
-        },
-        replyTo: {
-          select: {
-            id: true,
-            content: true,
-            isDeleted: true,
-            sender: { select: { displayName: true } },
-          },
-        },
-        reactions: { select: { id: true, emoji: true, userId: true } },
-        attachments: {
-          select: {
-            id: true,
-            fileUrl: true,
-            mimeType: true,
-            fileName: true,
-            fileSize: true,
-            fileType: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take,
-    });
-    const chronological = messages.reverse();
-    res.status(200).json({
-      success: true,
-      data: {
-        messages: chronological,
-        limit: take,
-        hasMore: messages.length >= take,
-        nextBefore: chronological.length > 0 ? chronological[0].createdAt : null,
-      },
-    });
-  } catch (error) {
-    console.error('Get group messages error:', error);
-    res.status(500).json({ error: 'Failed to fetch messages', code: 'FETCH_ERROR' });
-  }
-});
-
-router.post('/:groupId/leave', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user?.id || req.userId;
-    const { groupId } = req.params;
-    const member = await prisma.groupMember.findFirst({ where: { groupId, userId } });
-    if (!member) {
-      return res.status(404).json({ error: 'You are not a member of this group', code: 'NOT_MEMBER' });
-    }
-    const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (group.createdById === userId) {
-      return res.status(400).json({
-        error: 'Group creator cannot leave. Delete the group instead',
-        code: 'CREATOR_CANNOT_LEAVE',
-      });
-    }
-    await prisma.groupMember.delete({ where: { id: member.id } });
-    res.status(200).json({ success: true, message: 'You have left the group' });
-  } catch (error) {
-    console.error('Leave group error:', error);
-    res.status(500).json({ error: 'Failed to leave group', code: 'LEAVE_ERROR' });
-  }
-});
-
-export default router;
