@@ -56,4 +56,54 @@ router.post('/read-all', async (req, res) => {
   }
 });
 
+/**
+ * Create in-app notification for a new message (respects notificationsEnabled).
+ * Optionally emits socket event notification:new
+ */
+export async function notifyNewMessage(prismaClient, io, {
+  recipientId,
+  senderId,
+  senderName,
+  content,
+  conversationId,
+  groupId,
+}) {
+  if (!recipientId || recipientId === senderId) return null;
+  try {
+    const settings = await prismaClient.userSettings.findUnique({
+      where: { userId: recipientId },
+      select: { notificationsEnabled: true },
+    });
+    if (settings && settings.notificationsEnabled === false) return null;
+
+    const preview = String(content || 'Sent a photo').slice(0, 140);
+    const title = senderName || 'New message';
+    const link = conversationId
+      ? `/chat/${conversationId}`
+      : groupId
+        ? `/group/${groupId}`
+        : null;
+
+    const n = await prismaClient.notification.create({
+      data: {
+        userId: recipientId,
+        type: groupId ? 'group_message' : 'direct_message',
+        title,
+        content: preview,
+        link,
+      },
+    });
+
+    if (io) {
+      try {
+        io.to(`user:${recipientId}`).emit('notification:new', { notification: n });
+      } catch (_) {}
+    }
+    return n;
+  } catch (e) {
+    console.warn('notifyNewMessage', e?.message);
+    return null;
+  }
+}
+
 export default router;
