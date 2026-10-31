@@ -355,8 +355,32 @@ router.post('/:conversationId/read', authenticateToken, requireConversationAcces
     const { conversationId } = req.params;
     const currentUserId = req.userId;
     const conv = req.conversation;
-    const data = conv.user1Id === currentUserId ? { user1LastReadAt: new Date() } : { user2LastReadAt: new Date() };
+    const readAt = new Date();
+    const data = conv.user1Id === currentUserId ? { user1LastReadAt: readAt } : { user2LastReadAt: readAt };
     await prisma.conversation.update({ where: { id: conversationId }, data });
+
+    // Privacy: only emit read receipt if reader allows showReadReceipts
+    try {
+      const settings = await prisma.userSettings.findUnique({
+        where: { userId: currentUserId },
+        select: { showReadReceipts: true },
+      });
+      const allowReceipts = !settings || settings.showReadReceipts !== false;
+      if (allowReceipts) {
+        const otherId = conv.user1Id === currentUserId ? conv.user2Id : conv.user1Id;
+        const io = req.app.get('io');
+        if (io && otherId) {
+          io.to(`user:${otherId}`).emit('conversation:read', {
+            conversationId,
+            userId: currentUserId,
+            readAt: readAt.toISOString(),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('read receipt emit', e?.message);
+    }
+
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Mark read error:', error);

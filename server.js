@@ -17,6 +17,7 @@ import {
   uploadRoutes,
   settingsRoutes,
   aiRoutes,
+  notificationRoutes,
   initChatHandler,
   initPresenceHandler,
   errorHandler,
@@ -106,7 +107,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-/* ---- API mounts (unchanged paths) ---- */
+/* ---- API mounts (unchanged paths + notifications) ---- */
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
@@ -117,6 +118,7 @@ app.use('/api/groups', authenticateToken, groupRoutes);
 app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
+app.use('/api/notifications', authenticateToken, notificationRoutes);
 
 io.use(async (socket, next) => {
   try {
