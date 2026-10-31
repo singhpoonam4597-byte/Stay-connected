@@ -7,20 +7,22 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 
-import authRoutes from './authRoutes.js';
-import userRoutes from './users.js';
-import messageRoutes from './messages.js';
-import conversationRoutes from './conversations.js';
-import groupRoutes from './groups.js';
-import uploadRoutes from './upload.js';
-import settingsRoutes from './settings.js';
-import aiRoutes from './ai.js';
-import { authenticateToken } from './jwt.js';
-import { errorHandler } from './errorHandler.js';
-import { initChatHandler } from './chatHandler.js';
-import { initPresenceHandler } from './presenceHandler.js';
-import { prisma } from './prisma.js';
-import { rateLimit as memLimit } from './scale.js';
+import {
+  authRoutes,
+  authenticateToken,
+  userRoutes,
+  messageRoutes,
+  conversationRoutes,
+  groupRoutes,
+  uploadRoutes,
+  settingsRoutes,
+  aiRoutes,
+  initChatHandler,
+  initPresenceHandler,
+  errorHandler,
+  rateLimit as memLimit,
+  prisma,
+} from './modules/index.js';
 
 dotenv.config();
 
@@ -104,6 +106,7 @@ app.get('/health', (req, res) => {
   });
 });
 
+/* ---- API mounts (unchanged paths) ---- */
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
