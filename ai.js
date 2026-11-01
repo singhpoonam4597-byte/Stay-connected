@@ -16,20 +16,22 @@ import { rateLimit as memLimit } from './scale.js';
 const router = express.Router();
 
 const SYSTEM_PROMPTS = {
-  chat: `You are Connect AI, the built-in assistant inside the Connect messaging app.
-Be helpful, clear, and concise. Match a modern chat tone.
-Never say you are Gemini, ChatGPT, Grok, Groq, Llama, OpenAI, Google, or xAI.
-If asked who you are, say you are Connect AI.`,
+  chat: `You are Connect AI — the built-in assistant inside the Connect messaging app.
+Be helpful, sharp, and concise. Write like a capable product assistant, not a chatbot script.
+Use short paragraphs. Prefer practical answers. Ask a clarifying question only when needed.
+Never reveal or name underlying models or providers (not Gemini, ChatGPT, Grok, Groq, Llama, OpenAI, Google, or xAI).
+If asked who you are, say you are Connect AI, the assistant inside Connect.
+You may help with writing messages, planning, general knowledge, and product questions about Connect (messaging, privacy settings, groups).`,
 
   study: `You are Connect AI in Study Helper mode.
-Explain concepts clearly, step by step. Use simple language.
-Summarize when asked. Guide understanding, not only final answers.
-Never mention underlying model providers.`,
+Teach clearly: break ideas into steps, use simple language, give one example when it helps.
+Prefer understanding over dumping long walls of text. End with a short check question when useful.
+Never mention underlying model providers. You are Connect AI.`,
 
   code: `You are Connect AI in Code Assistant mode.
-Help with programming: explain, debug, write clean code.
-Prefer clear code blocks and short explanations.
-Never mention underlying model providers.`,
+Help with programming: explain, debug, and write clean, modern code.
+Prefer correct, minimal examples with brief notes. Call out edge cases when important.
+Never mention underlying model providers. You are Connect AI.`,
 };
 
 /** Free / public Groq chat models (2026). Llama 3.3 70B is enterprise-only. */
@@ -76,19 +78,15 @@ async function callOpenAICompatible(baseUrl, key, model, messages, system) {
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
   }
   const text = data?.choices?.[0]?.message?.content || '';
-  if (!text.trim()) throw new Error('Empty AI response');
-  return text.trim();
+  if (!String(text).trim()) throw new Error('Empty AI response');
+  return String(text).trim();
 }
 
 async function callGroq(messages, system) {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error('NO_KEY');
-
   let lastErr = null;
-  const tried = new Set();
   for (const model of GROQ_MODELS) {
-    if (!model || tried.has(model)) continue;
-    tried.add(model);
     try {
       return await callOpenAICompatible(
         'https://api.groq.com/openai/v1',
@@ -99,22 +97,30 @@ async function callGroq(messages, system) {
       );
     } catch (e) {
       lastErr = e;
-      console.error(`[ai] groq model ${model} failed:`, e?.message || e);
+      console.error('[ai] groq model failed', model, e?.message || e);
     }
   }
-  throw lastErr || new Error('All Groq models failed');
+  throw lastErr || new Error('Groq failed');
 }
 
 async function callOpenAI(messages, system) {
-  const key = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  return callOpenAICompatible('https://api.openai.com/v1', key, model, messages, system);
+  return callOpenAICompatible(
+    'https://api.openai.com/v1',
+    process.env.OPENAI_API_KEY,
+    process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    messages,
+    system
+  );
 }
 
 async function callXai(messages, system) {
-  const key = process.env.XAI_API_KEY;
-  const model = process.env.XAI_MODEL || 'grok-2-latest';
-  return callOpenAICompatible('https://api.x.ai/v1', key, model, messages, system);
+  return callOpenAICompatible(
+    'https://api.x.ai/v1',
+    process.env.XAI_API_KEY,
+    process.env.XAI_MODEL || 'grok-2-latest',
+    messages,
+    system
+  );
 }
 
 async function callGemini(messages, system) {
@@ -122,25 +128,22 @@ async function callGemini(messages, system) {
   if (!key) throw new Error('NO_KEY');
   const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(String(key).trim())}`;
-  const contents = [];
-  for (const m of messages) {
-    const role = m.role === 'assistant' ? 'model' : 'user';
-    contents.push({ role, parts: [{ text: String(m.content || '') }] });
-  }
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents,
-    generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-  };
+  const contents = messages.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents,
+      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error?.message || `Gemini error ${res.status}`);
   const text =
-    data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ||
     data?.candidates?.[0]?.content?.parts?.[0]?.text ||
     '';
   if (!text.trim()) throw new Error('Empty AI response');
@@ -214,7 +217,6 @@ router.post('/chat', aiRateLimit, async (req, res) => {
         code: 'AI_NOT_CONFIGURED',
       });
     }
-    // Surface a short safe hint (not the full provider name spam)
     const hint = String(err?.message || '').slice(0, 120);
     return res.status(502).json({
       error: hint
@@ -227,15 +229,3 @@ router.post('/chat', aiRateLimit, async (req, res) => {
 
 router.get('/status', async (req, res) => {
   const ready = !!(
-    process.env.GROQ_API_KEY ||
-    process.env.GEMINI_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    process.env.XAI_API_KEY
-  );
-  res.json({
-    success: true,
-    data: { ready, features: ['chat', 'study', 'code'] },
-  });
-});
-
-export default router;
