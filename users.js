@@ -50,18 +50,36 @@ router.get('/search', async (req, res) => {
     if (!q || q.trim().length === 0) {
       return res.status(400).json({ error: 'Search query is required', code: 'MISSING_QUERY' });
     }
-    const searchTerm = q.trim().toLowerCase();
+    const searchTerm = String(q).trim();
     const maxLimit = Math.min(parseInt(limit) || 20, 100);
     const excludedIds = await getBlockedRelatedIds(currentUserId);
+    // Privacy: public users fuzzy-match; private users exact username only
     const users = await prisma.user.findMany({
       where: {
         AND: [
-          { OR: [
-            { username: { contains: searchTerm, mode: 'insensitive' } },
-            { displayName: { contains: searchTerm, mode: 'insensitive' } },
-          ]},
           { id: { not: currentUserId } },
           ...(excludedIds.length ? [{ id: { notIn: excludedIds } }] : []),
+          {
+            OR: [
+              {
+                AND: [
+                  { isPrivate: false },
+                  {
+                    OR: [
+                      { username: { contains: searchTerm, mode: 'insensitive' } },
+                      { displayName: { contains: searchTerm, mode: 'insensitive' } },
+                    ],
+                  },
+                ],
+              },
+              {
+                AND: [
+                  { isPrivate: true },
+                  { username: { equals: searchTerm, mode: 'insensitive' } },
+                ],
+              },
+            ],
+          },
         ],
       },
       select: publicUserSelect,
