@@ -34,7 +34,7 @@ Prefer correct, minimal examples with brief notes. Call out edge cases when impo
 Never mention underlying model providers. You are Connect AI.`,
 };
 
-/** Free / public Groq chat models (2026). Llama 3.3 70B is enterprise-only. */
+/** Free / public Groq chat models (2026). */
 const GROQ_MODELS = [
   process.env.GROQ_MODEL,
   'openai/gpt-oss-20b',
@@ -143,9 +143,7 @@ async function callGemini(messages, system) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error?.message || `Gemini error ${res.status}`);
-  const text =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-    '';
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   if (!text.trim()) throw new Error('Empty AI response');
   return text.trim();
 }
@@ -153,7 +151,6 @@ async function callGemini(messages, system) {
 async function generateReply(feature, messages) {
   const system = SYSTEM_PROMPTS[feature] || SYSTEM_PROMPTS.chat;
   const provider = (process.env.AI_PROVIDER || 'groq').toLowerCase();
-
   const order =
     provider === 'gemini'
       ? ['gemini', 'groq', 'openai', 'xai']
@@ -162,7 +159,6 @@ async function generateReply(feature, messages) {
         : provider === 'xai'
           ? ['xai', 'groq', 'gemini', 'openai']
           : ['groq', 'gemini', 'openai', 'xai'];
-
   let lastErr = null;
   for (const p of order) {
     try {
@@ -186,7 +182,6 @@ router.post('/chat', aiRateLimit, async (req, res) => {
     if (!['chat', 'study', 'code'].includes(feature)) {
       return res.status(400).json({ error: 'Invalid feature', code: 'BAD_FEATURE' });
     }
-
     let messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     messages = messages
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
@@ -195,18 +190,13 @@ router.post('/chat', aiRateLimit, async (req, res) => {
         role: m.role,
         content: String(m.content).slice(0, 8000),
       }));
-
     if (!messages.length || messages[messages.length - 1].role !== 'user') {
       return res.status(400).json({ error: 'Send a user message', code: 'NO_MESSAGE' });
     }
-
     const reply = await generateReply(feature, messages);
-
     return res.status(200).json({
       success: true,
-      data: {
-        message: { role: 'assistant', content: reply },
-      },
+      data: { message: { role: 'assistant', content: reply } },
     });
   } catch (err) {
     console.error('[ai] chat error:', err?.message || err);
@@ -229,3 +219,20 @@ router.post('/chat', aiRateLimit, async (req, res) => {
 
 router.get('/status', async (req, res) => {
   const ready = !!(
+    process.env.GROQ_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.XAI_API_KEY
+  );
+  res.json({
+    success: true,
+    data: {
+      ready,
+      configured: ready,
+      features: ['chat', 'study', 'code'],
+      module: 'intelligence',
+    },
+  });
+});
+
+export default router;
