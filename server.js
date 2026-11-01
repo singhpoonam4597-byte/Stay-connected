@@ -18,6 +18,7 @@ import {
   settingsRoutes,
   aiRoutes,
   notificationRoutes,
+  discoverRoutes,
   initChatHandler,
   initPresenceHandler,
   errorHandler,
@@ -80,34 +81,31 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many attempts. Please try again in 15 minutes.', code: 'AUTH_RATE_LIMIT' },
 });
-const uploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 80, standardHeaders: true, legacyHeaders: false });
-const aiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'Too many AI requests. Please wait.', code: 'AI_RATE_LIMIT' },
+const messageSendLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Sending too fast. Please slow down.', code: 'MESSAGE_RATE_LIMIT' },
 });
-
-function messageSendLimiter(req, res, next) {
-  const uid = req.userId || req.user?.id || req.ip;
-  const r = memLimit(`msg:${uid}`, { limit: 60, windowMs: 60_000 });
-  if (!r.ok) {
-    return res.status(429).json({ error: 'Sending too fast. Please wait a moment.', code: 'MSG_RATE_LIMIT', retryAfterMs: r.retryAfterMs });
-  }
-  next();
-}
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 80, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many uploads. Try again later.', code: 'UPLOAD_RATE_LIMIT' },
+});
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'AI rate limit. Please wait a moment.', code: 'AI_RATE_LIMIT' },
+});
 
 app.use('/api/', generalLimiter);
 app.get('/health', (req, res) => {
-  res.status(200).json({
+  res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
+    environment: process.env.NODE_ENV || 'development',
     uptime: process.uptime(),
     allowedFrontends: FRONTEND_URLS,
-    connections: io.engine?.clientsCount ?? null,
+    connections: io.engine?.clientsCount ?? 0,
   });
 });
 
-/* ---- API mounts (unchanged paths + notifications) ---- */
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
@@ -119,50 +117,32 @@ app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
+app.use('/api/discover', authenticateToken, discoverRoutes);
 
-io.use(async (socket, next) => {
+initChatHandler(io);
+initPresenceHandler(io);
+
+io.use((socket, next) => {
   try {
     const token =
       socket.handshake.auth?.token ||
       socket.handshake.query?.token ||
       (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!token) return next(new Error('Authentication error'));
+    if (!token) return next(new Error('Authentication required'));
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded.id || decoded.userId || decoded.sub;
-    socket.userEmail = decoded.email;
-    socket.username = decoded.username;
-    if (!socket.userId) return next(new Error('Authentication error'));
+    socket.userId = decoded.userId || decoded.id;
+    socket.user = decoded;
     next();
-  } catch {
-    next(new Error('Authentication error'));
+  } catch (e) {
+    next(new Error('Invalid token'));
   }
 });
 
-initChatHandler(io, prisma);
-initPresenceHandler(io, prisma);
-
-io.on('connection', (socket) => {
-  if (socket.userId) socket.join(`user:${socket.userId}`);
-});
-
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found', path: req.path, method: req.method });
-});
 app.use(errorHandler);
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Connect backend on 0.0.0.0:${PORT}`);
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () => {
+  console.log(`Connect API listening on ${PORT}`);
 });
 
-async function shutdown(signal) {
-  httpServer.close(async () => {
-    try { await prisma.$disconnect(); } catch (_) {}
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10000).unref?.();
-}
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-export { app, httpServer, io, prisma };
+export { prisma, app, io, httpServer };

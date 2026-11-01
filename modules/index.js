@@ -12,4 +12,5 @@ export { uploadRoutes } from './upload/index.js';
 export { initChatHandler, initPresenceHandler } from './realtime/index.js';
 export { errorHandler, rateLimit } from './shared/index.js';
 export { notificationRoutes } from './notifications/index.js';
+export { discoverRoutes } from './discover/index.js';
 export { prisma } from './database/index.js';
