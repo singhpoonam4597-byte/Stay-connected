@@ -18,7 +18,6 @@ import {
   settingsRoutes,
   aiRoutes,
   notificationRoutes,
-  discoverRoutes,
   initChatHandler,
   initPresenceHandler,
   errorHandler,
@@ -117,32 +116,50 @@ app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
-app.use('/api/discover', authenticateToken, discoverRoutes);
 
-initChatHandler(io);
-initPresenceHandler(io);
-
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const token =
       socket.handshake.auth?.token ||
       socket.handshake.query?.token ||
       (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!token) return next(new Error('Authentication required'));
+    if (!token) return next(new Error('Authentication error'));
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded.userId || decoded.id;
-    socket.user = decoded;
+    socket.userId = decoded.id || decoded.userId || decoded.sub;
+    socket.userEmail = decoded.email;
+    socket.username = decoded.username;
+    if (!socket.userId) return next(new Error('Authentication error'));
     next();
-  } catch (e) {
-    next(new Error('Invalid token'));
+  } catch {
+    next(new Error('Authentication error'));
   }
 });
 
-app.use(errorHandler);
+initChatHandler(io, prisma);
+initPresenceHandler(io, prisma);
 
-const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`Connect API listening on ${PORT}`);
+io.on('connection', (socket) => {
+  if (socket.userId) socket.join(`user:${socket.userId}`);
 });
 
-export { prisma, app, io, httpServer };
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found', path: req.path, method: req.method });
+});
+app.use(errorHandler);
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Connect backend on 0.0.0.0:${PORT}`);
+});
+
+async function shutdown(signal) {
+  httpServer.close(async () => {
+    try { await prisma.$disconnect(); } catch (_) {}
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10000).unref?.();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+export { app, httpServer, io, prisma };
