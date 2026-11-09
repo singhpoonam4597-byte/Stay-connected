@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "test": "node --test home.test.js",
+    "test": "node --test",
     "build": "prisma generate --schema=./schema.prisma",
     "postinstall": "prisma generate --schema=./schema.prisma",
     "prisma:generate": "prisma generate --schema=./schema.prisma",

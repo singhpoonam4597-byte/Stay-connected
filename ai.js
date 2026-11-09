@@ -32,7 +32,56 @@ Never mention underlying model providers. You are Connect AI.`,
 Help with programming: explain, debug, and write clean, modern code.
 Prefer correct, minimal examples with brief notes. Call out edge cases when important.
 Never mention underlying model providers. You are Connect AI.`,
+
+  writing: `You are Connect AI in Writing Assistant mode.
+Help draft, revise, shorten, expand, and adapt writing to the user's audience and tone.
+Preserve the user's intent and facts. Do not invent personal details or unsupported claims.
+When helpful, briefly explain the most important edits. Never mention underlying model providers.`,
+
+  research: `You are Connect AI in Research Assistant mode.
+Help structure a research question, compare evidence the user supplies, and explain concepts clearly.
+You do not have live web access in this mode. Never claim that you searched the web or invent citations, URLs, quotations, or study findings.
+Separate established information from uncertainty and tell the user when current source verification is needed.
+Never mention underlying model providers.`,
+
+  summarize: `You are Connect AI in Summary mode.
+Summarize only the content the user provides, keeping the main claims, decisions, and useful details.
+Do not add facts that are not in the source. Adapt the length and format to the user's request.
+If no source content is present, ask the user to paste or attach the material. Never mention underlying model providers.`,
+
+  document: `You are Connect AI in Document Analyst mode.
+Analyze only the document text and context supplied by the user. Extract key points, action items, dates, decisions, and open questions when requested.
+Distinguish what the document explicitly says from your interpretation. Do not claim to have read an attachment that is not included in the conversation.
+Never mention underlying model providers.`,
 };
+
+const AI_FEATURES = Object.keys(SYSTEM_PROMPTS);
+
+function normalizeAIRequest(body = {}) {
+  const feature = String(body.feature || 'chat').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(SYSTEM_PROMPTS, feature)) {
+    return { error: { status: 400, error: 'Invalid feature', code: 'BAD_FEATURE' } };
+  }
+
+  const messages = (Array.isArray(body.messages) ? body.messages : [])
+    .filter((message) =>
+      message &&
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof message.content === 'string' &&
+      message.content.trim()
+    )
+    .slice(-20)
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim().slice(0, 8000),
+    }));
+
+  if (!messages.length || messages[messages.length - 1].role !== 'user') {
+    return { error: { status: 400, error: 'Send a user message', code: 'NO_MESSAGE' } };
+  }
+
+  return { feature, messages };
+}
 
 /** Free / public Groq chat models (2026). */
 const GROQ_MODELS = [
@@ -178,21 +227,14 @@ async function generateReply(feature, messages) {
 
 router.post('/chat', aiRateLimit, async (req, res) => {
   try {
-    const feature = String(req.body?.feature || 'chat').toLowerCase();
-    if (!['chat', 'study', 'code'].includes(feature)) {
-      return res.status(400).json({ error: 'Invalid feature', code: 'BAD_FEATURE' });
+    const normalized = normalizeAIRequest(req.body || {});
+    if (normalized.error) {
+      return res.status(normalized.error.status).json({
+        error: normalized.error.error,
+        code: normalized.error.code,
+      });
     }
-    let messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-    messages = messages
-      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
-      .slice(-20)
-      .map((m) => ({
-        role: m.role,
-        content: String(m.content).slice(0, 8000),
-      }));
-    if (!messages.length || messages[messages.length - 1].role !== 'user') {
-      return res.status(400).json({ error: 'Send a user message', code: 'NO_MESSAGE' });
-    }
+    const { feature, messages } = normalized;
     const reply = await generateReply(feature, messages);
     return res.status(200).json({
       success: true,
@@ -202,16 +244,12 @@ router.post('/chat', aiRateLimit, async (req, res) => {
     console.error('[ai] chat error:', err?.message || err);
     if (err?.message === 'NO_KEY') {
       return res.status(503).json({
-        error:
-          'Connect AI is not configured yet. Add GROQ_API_KEY on the server (free at console.groq.com).',
+        error: 'Connect AI is not configured yet. Please try again later.',
         code: 'AI_NOT_CONFIGURED',
       });
     }
-    const hint = String(err?.message || '').slice(0, 120);
     return res.status(502).json({
-      error: hint
-        ? `Connect AI is temporarily unavailable. (${hint})`
-        : 'Connect AI is temporarily unavailable. Try again.',
+      error: 'Connect AI is temporarily unavailable. Try again.',
       code: 'AI_UPSTREAM',
     });
   }
@@ -229,7 +267,7 @@ router.get('/status', async (req, res) => {
     data: {
       ready,
       configured: ready,
-      features: ['chat', 'study', 'code'],
+      features: AI_FEATURES,
       module: 'intelligence',
     },
   });
