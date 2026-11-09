@@ -39,6 +39,13 @@ model User {
   sessionTokens         SessionToken[]
   blockedUsers          BlockedUser[] @relation("blocker")
   blockedByUsers        BlockedUser[] @relation("blocked")
+  createdSpaces         Space[] @relation("SpaceCreator")
+  spaceMemberships      SpaceMember[]
+  spaceInvitesSent      SpaceInvite[] @relation("SpaceInviteSender")
+  spaceInvitesReceived  SpaceInvite[] @relation("SpaceInviteRecipient")
+  spaceActivities       SpaceActivity[]
+  spaceDocumentsCreated SpaceDocument[] @relation("SpaceDocumentCreator")
+  spaceDocumentsUpdated SpaceDocument[] @relation("SpaceDocumentUpdater")
 
   @@index([email])
   @@index([username])
@@ -121,6 +128,90 @@ model GroupMember {
   @@unique([groupId, userId])
   @@index([groupId])
   @@index([userId])
+}
+
+model Space {
+  id          String         @id @default(cuid())
+  name        String         @db.VarChar(80)
+  description String?        @db.VarChar(500)
+  visibility  String         @default("private") @db.VarChar(16)
+  createdById String         @db.Text
+  createdBy   User           @relation("SpaceCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  members     SpaceMember[]
+  invites     SpaceInvite[]
+  activities  SpaceActivity[]
+  documents   SpaceDocument[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([createdById])
+  @@index([visibility])
+  @@index([updatedAt])
+}
+
+model SpaceMember {
+  id       String   @id @default(cuid())
+  spaceId  String   @db.Text
+  space    Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId   String   @db.Text
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     String   @default("member") @db.VarChar(20)
+  joinedAt DateTime @default(now())
+
+  @@unique([spaceId, userId])
+  @@index([spaceId])
+  @@index([userId])
+}
+
+model SpaceInvite {
+  id            String   @id @default(cuid())
+  spaceId       String   @db.Text
+  space         Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  invitedById   String   @db.Text
+  invitedBy     User     @relation("SpaceInviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  invitedUserId String   @db.Text
+  invitedUser   User     @relation("SpaceInviteRecipient", fields: [invitedUserId], references: [id], onDelete: Cascade)
+  status        String   @default("pending") @db.VarChar(20)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([spaceId, invitedUserId])
+  @@index([invitedUserId, status])
+  @@index([spaceId, status])
+}
+
+model SpaceActivity {
+  id        String   @id @default(cuid())
+  spaceId   String   @db.Text
+  space     Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  actorId   String?  @db.Text
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  type      String   @db.VarChar(40)
+  detail    String?  @db.VarChar(255)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([spaceId, createdAt])
+  @@index([actorId])
+}
+
+model SpaceDocument {
+  id          String   @id @default(cuid())
+  spaceId     String   @db.Text
+  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  title       String   @db.VarChar(120)
+  content     String   @default("") @db.Text
+  version     Int      @default(1)
+  createdById String?  @db.Text
+  createdBy   User?    @relation("SpaceDocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById String?  @db.Text
+  updatedBy   User?    @relation("SpaceDocumentUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([spaceId, updatedAt])
+  @@index([createdById])
+  @@index([updatedById])
 }
 
 model Message {

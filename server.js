@@ -19,6 +19,7 @@ import {
   aiRoutes,
   notificationRoutes,
   homeRoutes,
+  spacesRoutes,
   initChatHandler,
   initPresenceHandler,
   errorHandler,
@@ -118,6 +119,7 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
 app.use('/api/home', authenticateToken, homeRoutes);
+app.use('/api/spaces', authenticateToken, spacesRoutes);
 
 io.use(async (socket, next) => {
   try {
