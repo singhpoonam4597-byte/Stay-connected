@@ -364,7 +364,7 @@ router.post('/chat', aiRateLimit, async (req, res) => {
       const firstUserMessage = messages.find((m) => m.role === 'user')?.content || '';
       const nextTitle =
         thread.title === 'New conversation' && firstUserMessage
-          ? firstUserMessage.replace(/\\s+/g, ' ').trim().slice(0, 72) || 'New conversation'
+          ? firstUserMessage.replace(/\s+/g, ' ').trim().slice(0, 72) || 'New conversation'
           : thread.title;
 
       await prisma.$transaction([
