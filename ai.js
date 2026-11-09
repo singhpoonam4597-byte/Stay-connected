@@ -12,6 +12,7 @@
 
 import express from 'express';
 import { rateLimit as memLimit } from './scale.js';
+import { prisma } from './prisma.js';
 
 const router = express.Router();
 
@@ -34,7 +35,6 @@ Prefer correct, minimal examples with brief notes. Call out edge cases when impo
 Never mention underlying model providers. You are Connect AI.`,
 };
 
-/** Free / public Groq chat models (2026). */
 const GROQ_MODELS = [
   process.env.GROQ_MODEL,
   'openai/gpt-oss-20b',
@@ -42,6 +42,8 @@ const GROQ_MODELS = [
   'llama-3.1-8b-instant',
   'llama-3.3-70b-versatile',
 ].filter(Boolean);
+
+const VALID_FEATURES = ['chat', 'study', 'code'];
 
 function aiRateLimit(req, res, next) {
   const uid = req.userId || req.user?.id || req.ip;
@@ -56,10 +58,23 @@ function aiRateLimit(req, res, next) {
   next();
 }
 
+function getUserId(req) {
+  return req.userId || req.user?.id || null;
+}
+
+function cleanFeature(value) {
+  const feature = String(value || 'chat').toLowerCase();
+  return VALID_FEATURES.includes(feature) ? feature : null;
+}
+
+function cleanTitle(value) {
+  return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+}
+
 async function callOpenAICompatible(baseUrl, key, model, messages, system) {
   if (!key) throw new Error('NO_KEY');
   const cleanKey = String(key).trim();
-  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+  const res = await fetch(`${baseUrl.replace(/\\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -176,27 +191,202 @@ async function generateReply(feature, messages) {
   throw new Error('NO_KEY');
 }
 
-router.post('/chat', aiRateLimit, async (req, res) => {
+/*
+ * Persistent conversation endpoints.
+ * All /api/ai routes are mounted behind authenticateToken in server.js.
+ * Every database lookup is scoped to the authenticated user.
+ */
+router.get('/threads', async (req, res) => {
   try {
-    const feature = String(req.body?.feature || 'chat').toLowerCase();
-    if (!['chat', 'study', 'code'].includes(feature)) {
+    const userId = getUserId(req);
+    const feature = req.query.feature ? cleanFeature(req.query.feature) : null;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    if (req.query.feature && !feature) {
       return res.status(400).json({ error: 'Invalid feature', code: 'BAD_FEATURE' });
     }
-    let messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-    messages = messages
+
+    const threads = await prisma.aiThread.findMany({
+      where: { userId, ...(feature ? { feature } : {}) },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        title: true,
+        feature: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: { select: { messages: true } },
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+          select: { role: true, content: true, createdAt: true },
+        },
+      },
+    });
+    return res.json({ success: true, data: { threads } });
+  } catch (err) {
+    console.error('[ai] list threads:', err?.message || err);
+    return res.status(500).json({ error: 'Could not load AI conversations' });
+  }
+});
+
+router.post('/threads', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const feature = cleanFeature(req.body?.feature);
+    if (!feature) return res.status(400).json({ error: 'Invalid feature', code: 'BAD_FEATURE' });
+
+    const title = cleanTitle(req.body?.title) || 'New conversation';
+    const thread = await prisma.aiThread.create({
+      data: { userId, feature, title },
+      select: { id: true, title: true, feature: true, createdAt: true, updatedAt: true },
+    });
+    return res.status(201).json({ success: true, data: { thread } });
+  } catch (err) {
+    console.error('[ai] create thread:', err?.message || err);
+    return res.status(500).json({ error: 'Could not create AI conversation' });
+  }
+});
+
+router.get('/threads/:threadId', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const thread = await prisma.aiThread.findFirst({
+      where: { id: req.params.threadId, userId },
+      select: {
+        id: true,
+        title: true,
+        feature: true,
+        createdAt: true,
+        updatedAt: true,
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+          select: { id: true, role: true, content: true, createdAt: true },
+        },
+      },
+    });
+    if (!thread) return res.status(404).json({ error: 'Conversation not found' });
+    thread.messages.reverse();
+    return res.json({ success: true, data: { thread } });
+  } catch (err) {
+    console.error('[ai] get thread:', err?.message || err);
+    return res.status(500).json({ error: 'Could not load AI conversation' });
+  }
+});
+
+router.patch('/threads/:threadId', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const title = cleanTitle(req.body?.title);
+    if (!title) return res.status(400).json({ error: 'A conversation title is required' });
+
+    const result = await prisma.aiThread.updateMany({
+      where: { id: req.params.threadId, userId },
+      data: { title },
+    });
+    if (!result.count) return res.status(404).json({ error: 'Conversation not found' });
+    const thread = await prisma.aiThread.findFirst({
+      where: { id: req.params.threadId, userId },
+      select: { id: true, title: true, feature: true, createdAt: true, updatedAt: true },
+    });
+    return res.json({ success: true, data: { thread } });
+  } catch (err) {
+    console.error('[ai] rename thread:', err?.message || err);
+    return res.status(500).json({ error: 'Could not rename AI conversation' });
+  }
+});
+
+router.delete('/threads/:threadId', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    const result = await prisma.aiThread.deleteMany({
+      where: { id: req.params.threadId, userId },
+    });
+    if (!result.count) return res.status(404).json({ error: 'Conversation not found' });
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[ai] delete thread:', err?.message || err);
+    return res.status(500).json({ error: 'Could not delete AI conversation' });
+  }
+});
+
+router.post('/chat', aiRateLimit, async (req, res) => {
+  try {
+    const feature = cleanFeature(req.body?.feature);
+    if (!feature) {
+      return res.status(400).json({ error: 'Invalid feature', code: 'BAD_FEATURE' });
+    }
+
+    let incoming = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    incoming = incoming
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
       .slice(-20)
-      .map((m) => ({
-        role: m.role,
-        content: String(m.content).slice(0, 8000),
-      }));
-    if (!messages.length || messages[messages.length - 1].role !== 'user') {
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
+
+    if (!incoming.length || incoming[incoming.length - 1].role !== 'user') {
       return res.status(400).json({ error: 'Send a user message', code: 'NO_MESSAGE' });
     }
+
+    const threadId = typeof req.body?.threadId === 'string' ? req.body.threadId.trim() : '';
+    const userId = getUserId(req);
+    let messages = incoming;
+    let thread = null;
+
+    if (threadId) {
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
+      thread = await prisma.aiThread.findFirst({
+        where: { id: threadId, userId },
+        select: { id: true, feature: true, title: true },
+      });
+      if (!thread) return res.status(404).json({ error: 'Conversation not found' });
+      if (thread.feature !== feature) {
+        return res.status(400).json({ error: 'Conversation feature mismatch', code: 'FEATURE_MISMATCH' });
+      }
+
+      const lastUserMessage = incoming[incoming.length - 1];
+      const history = await prisma.aiMessage.findMany({
+        where: { threadId: thread.id },
+        orderBy: { createdAt: 'desc' },
+        take: 19,
+        select: { role: true, content: true },
+      });
+      messages = [...history.reverse(), lastUserMessage];
+    }
+
     const reply = await generateReply(feature, messages);
+
+    if (thread) {
+      const firstUserMessage = messages.find((m) => m.role === 'user')?.content || '';
+      const nextTitle =
+        thread.title === 'New conversation' && firstUserMessage
+          ? firstUserMessage.replace(/\\s+/g, ' ').trim().slice(0, 72) || 'New conversation'
+          : thread.title;
+
+      await prisma.$transaction([
+        prisma.aiMessage.create({
+          data: { threadId: thread.id, role: 'user', content: messages[messages.length - 1].content },
+        }),
+        prisma.aiMessage.create({
+          data: { threadId: thread.id, role: 'assistant', content: reply },
+        }),
+        prisma.aiThread.update({
+          where: { id: thread.id },
+          data: { title: nextTitle },
+        }),
+      ]);
+    }
+
     return res.status(200).json({
       success: true,
-      data: { message: { role: 'assistant', content: reply } },
+      data: {
+        message: { role: 'assistant', content: reply },
+        ...(thread ? { threadId: thread.id } : {}),
+      },
     });
   } catch (err) {
     console.error('[ai] chat error:', err?.message || err);
@@ -231,6 +421,7 @@ router.get('/status', async (req, res) => {
       configured: ready,
       features: ['chat', 'study', 'code'],
       module: 'intelligence',
+      persistence: true,
     },
   });
 });
