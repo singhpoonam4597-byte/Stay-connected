@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from './prisma.js';
+import { serializeProfileForViewer } from './userPrivacy.js';
 
 const router = express.Router();
 
@@ -40,7 +41,7 @@ async function getBlockedRelatedIds(currentUserId) {
 
 const publicUserSelect = {
   id: true, username: true, displayName: true, avatar: true, avatarColor: true,
-  bio: true, isVerified: true, isOnline: true, lastSeen: true,
+  bio: true, isPrivate: true, isVerified: true, isOnline: true, lastSeen: true,
 };
 
 router.get('/search', async (req, res) => {
@@ -86,7 +87,8 @@ router.get('/search', async (req, res) => {
       take: maxLimit,
       orderBy: [{ isVerified: 'desc' }, { lastSeen: 'desc' }],
     });
-    res.status(200).json({ success: true, data: { users, count: users.length, query: searchTerm } });
+    const visibleUsers = users.map((user) => serializeProfileForViewer(user));
+    res.status(200).json({ success: true, data: { users: visibleUsers, count: visibleUsers.length, query: searchTerm } });
   } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({ error: 'Failed to search users', code: 'SEARCH_ERROR' });
@@ -201,7 +203,7 @@ router.get('/:userId', checkNotBlocked, async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.user?.id || req.userId;
-    let user = await prisma.user.findUnique({
+    const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true, username: true, displayName: true, avatar: true, avatarColor: true,
@@ -209,20 +211,21 @@ router.get('/:userId', checkNotBlocked, async (req, res) => {
       },
     });
     if (!user) return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
-    if (userId !== currentUserId) {
+    const isCurrentUser = !!currentUserId && userId === currentUserId;
+    let showOnlineStatus = true;
+    if (!isCurrentUser && !user.isPrivate) {
       try {
         const s = await prisma.userSettings.findUnique({
           where: { userId },
           select: { showOnlineStatus: true },
         });
-        if (s && s.showOnlineStatus === false) {
-          user = { ...user, isOnline: false, lastSeen: null };
-        }
+        showOnlineStatus = !s || s.showOnlineStatus !== false;
       } catch (_) {}
     }
+    const profile = serializeProfileForViewer(user, { isSelf: isCurrentUser, showOnlineStatus });
     res.status(200).json({
       success: true,
-      data: { profile: user, isCurrentUser: userId === currentUserId },
+      data: { profile, isCurrentUser },
     });
   } catch (error) {
     console.error('Get user profile error:', error);
