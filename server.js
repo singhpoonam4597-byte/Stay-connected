@@ -18,6 +18,7 @@ import {
   settingsRoutes,
   aiRoutes,
   notificationRoutes,
+  homeRoutes,
   initChatHandler,
   initPresenceHandler,
   errorHandler,
@@ -116,6 +117,7 @@ app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
+app.use('/api/home', authenticateToken, homeRoutes);
 
 io.use(async (socket, next) => {
   try {

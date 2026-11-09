@@ -6,6 +6,7 @@ export { authRoutes, authenticateToken } from './auth/index.js';
 export { userRoutes } from './users/index.js';
 export { messageRoutes, conversationRoutes } from './messages/index.js';
 export { groupRoutes } from './groups/index.js';
+export { homeRoutes } from './home/index.js';
 export { aiRoutes } from './ai/index.js';
 export { settingsRoutes } from './settings/index.js';
 export { uploadRoutes } from './upload/index.js';
