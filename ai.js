@@ -414,14 +414,64 @@ router.get('/status', async (req, res) => {
     process.env.OPENAI_API_KEY ||
     process.env.XAI_API_KEY
   );
-  res.json({
+
+  // Read-only production checks. This endpoint never runs or changes migrations.
+  const database = { connected: false };
+  const tables = { aiThread: false, aiMessage: false };
+  const migration = {
+    name: '20261109000000_ai_threads',
+    applied: false,
+  };
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    database.connected = true;
+
+    const tableRows = await prisma.$queryRaw`
+      SELECT
+        to_regclass(format('%I.%I', current_schema(), 'AiThread')) IS NOT NULL AS "aiThread",
+        to_regclass(format('%I.%I', current_schema(), 'AiMessage')) IS NOT NULL AS "aiMessage"
+    `;
+    if (tableRows[0]) {
+      tables.aiThread = Boolean(tableRows[0].aiThread);
+      tables.aiMessage = Boolean(tableRows[0].aiMessage);
+    }
+
+    // Prisma records completed migrations in _prisma_migrations.
+    if (tables.aiThread && tables.aiMessage) {
+      const migrationRows = await prisma.$queryRaw`
+        SELECT EXISTS (
+          SELECT 1
+          FROM "_prisma_migrations"
+          WHERE migration_name = '20261109000000_ai_threads'
+            AND finished_at IS NOT NULL
+            AND rolled_back_at IS NULL
+        ) AS applied
+      `;
+      migration.applied = Boolean(migrationRows[0]?.applied);
+    }
+  } catch (err) {
+    // Keep internal database details out of this authenticated status response.
+    console.error('[ai] status database check failed:', err?.message || 'Database check failed');
+  }
+
+  const persistence =
+    database.connected &&
+    tables.aiThread &&
+    tables.aiMessage &&
+    migration.applied;
+
+  return res.json({
     success: true,
     data: {
       ready,
       configured: ready,
       features: ['chat', 'study', 'code'],
       module: 'intelligence',
-      persistence: true,
+      persistence,
+      database,
+      tables,
+      migration,
     },
   });
 });
