@@ -74,7 +74,7 @@ function cleanTitle(value) {
 async function callOpenAICompatible(baseUrl, key, model, messages, system) {
   if (!key) throw new Error('NO_KEY');
   const cleanKey = String(key).trim();
-  const res = await fetch(`${baseUrl.replace(/\\/+$/, '')}/chat/completions`, {
+  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
