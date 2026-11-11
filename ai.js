@@ -262,7 +262,9 @@ router.get('/threads/:threadId', async (req, res) => {
         createdAt: true,
         updatedAt: true,
         messages: {
-          orderBy: { createdAt: 'desc' },
+          // Fetch newest first. For legacy rows sharing a transaction timestamp,
+          // role ASC makes the reversed result place user before assistant.
+          orderBy: [{ createdAt: 'desc' }, { role: 'asc' }, { id: 'desc' }],
           take: 100,
           select: { id: true, role: true, content: true, createdAt: true },
         },
@@ -351,9 +353,10 @@ router.post('/chat', aiRateLimit, async (req, res) => {
       const lastUserMessage = incoming[incoming.length - 1];
       const history = await prisma.aiMessage.findMany({
         where: { threadId: thread.id },
-        orderBy: { createdAt: 'desc' },
+        // Match the thread loader's deterministic ordering for legacy timestamp ties.
+        orderBy: [{ createdAt: 'desc' }, { role: 'asc' }, { id: 'desc' }],
         take: 19,
-        select: { role: true, content: true },
+        select: { id: true, role: true, content: true },
       });
       messages = [...history.reverse(), lastUserMessage];
     }
@@ -367,12 +370,28 @@ router.post('/chat', aiRateLimit, async (req, res) => {
           ? firstUserMessage.replace(/\s+/g, ' ').trim().slice(0, 72) || 'New conversation'
           : thread.title;
 
+      // PostgreSQL now() is transaction-scoped, so two inserts in this
+      // transaction can receive identical createdAt values. Assign explicit,
+      // sequential timestamps to preserve the real conversation order.
+      const userMessageTime = new Date();
+      const assistantMessageTime = new Date(userMessageTime.getTime() + 1);
+
       await prisma.$transaction([
         prisma.aiMessage.create({
-          data: { threadId: thread.id, role: 'user', content: messages[messages.length - 1].content },
+          data: {
+            threadId: thread.id,
+            role: 'user',
+            content: messages[messages.length - 1].content,
+            createdAt: userMessageTime,
+          },
         }),
         prisma.aiMessage.create({
-          data: { threadId: thread.id, role: 'assistant', content: reply },
+          data: {
+            threadId: thread.id,
+            role: 'assistant',
+            content: reply,
+            createdAt: assistantMessageTime,
+          },
         }),
         prisma.aiThread.update({
           where: { id: thread.id },
