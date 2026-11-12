@@ -79,11 +79,11 @@ router.post('/', authenticateToken, async (req, res) => {
       where: { id: { in: memberIds } },
       select: { id: true },
     });
-    const ok = new Set(found.map((u) => u.id));
-    memberIds = memberIds.filter((id) => ok.has(id));
+    const ok = new Set(found.map((u) => String(u.id)));
+    memberIds = memberIds.filter((id) => ok.has(String(id)));
     if (memberIds.length === 0) {
       return res.status(400).json({
-        error: 'None of the selected members were found',
+        error: 'None of the selected members were found. Search again and pick people from the list.',
         code: 'MEMBERS_NOT_FOUND',
       });
     }
