@@ -117,10 +117,10 @@ export const initPresenceHandler = (io, prismaClient) => {
             where: { id: conversationId },
             include: {
               user1: {
-                select: { id: true, username: true, displayName: true, isOnline: true },
+                select: { id: true, username: true, displayName: true, isOnline: true, lastSeen: true },
               },
               user2: {
-                select: { id: true, username: true, displayName: true, isOnline: true },
+                select: { id: true, username: true, displayName: true, isOnline: true, lastSeen: true },
               },
             },
           });
@@ -139,7 +139,7 @@ export const initPresenceHandler = (io, prismaClient) => {
               members: {
                 include: {
                   user: {
-                    select: { id: true, username: true, displayName: true, isOnline: true },
+                    select: { id: true, username: true, displayName: true, isOnline: true, lastSeen: true },
                   },
                 },
               },
@@ -213,6 +213,7 @@ export const initPresenceHandler = (io, prismaClient) => {
             username,
             status: 'offline',
             timestamp: new Date(),
+            lastSeen: new Date(),
           });
           return;
         }
@@ -249,12 +250,13 @@ export const initPresenceHandler = (io, prismaClient) => {
         const room = io.sockets.adapter.rooms.get(`user:${userId}`);
         if (room && room.size > 0) return;
 
+        const seenAt = new Date();
         if (shouldWrite(`offline:${userId}`, 15_000)) {
           await prismaClient.user.update({
             where: { id: userId },
             data: {
               isOnline: false,
-              lastSeen: new Date(),
+              lastSeen: seenAt,
             },
           });
         }
@@ -262,7 +264,8 @@ export const initPresenceHandler = (io, prismaClient) => {
         emitToJoinedRooms('user:offline', {
           userId,
           username,
-          timestamp: new Date(),
+          timestamp: seenAt,
+          lastSeen: seenAt,
         });
       } catch (error) {
         console.error('Disconnect cleanup error:', error);
