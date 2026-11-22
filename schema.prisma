@@ -40,6 +40,9 @@ model User {
   blockedUsers          BlockedUser[] @relation("blocker")
   blockedByUsers        BlockedUser[] @relation("blocked")
   aiThreads             AiThread[]
+  starredMessages       StarredMessage[]
+  scheduledMessages     ScheduledMessage[] @relation("ScheduledSender")
+  locationShares        LiveLocationShare[] @relation("LocationSender")
 
   @@index([email])
   @@index([username])
@@ -78,6 +81,9 @@ model Conversation {
   user2LastReadAt DateTime?
   user1ArchivedAt DateTime?
   user2ArchivedAt DateTime?
+  disappearingSeconds Int?
+  scheduledMessages ScheduledMessage[]
+  locationShares LiveLocationShare[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -127,6 +133,7 @@ model GroupMember {
 model Message {
   id             String       @id @default(cuid())
   content        String       @db.Text
+  kind           String       @default("text") @db.VarChar(24)
   senderId       String       @db.Text
   sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
   conversationId String?      @db.Text
@@ -144,6 +151,8 @@ model Message {
   isEdited       Boolean      @default(false)
   editedAt       DateTime?
   isDeleted      Boolean      @default(false)
+  expiresAt      DateTime?
+  starredBy      StarredMessage[]
   deletedAt      DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -157,6 +166,7 @@ model Message {
   @@index([createdAt])
   @@index([isPinned])
   @@index([isDeleted])
+  @@index([expiresAt])
 }
 
 model MessageHide {
@@ -290,4 +300,51 @@ model AiMessage {
   createdAt DateTime @default(now())
 
   @@index([threadId, createdAt])
+}
+
+
+model StarredMessage {
+  id        String   @id @default(cuid())
+  messageId String   @db.Text
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String   @db.Text
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
+}
+
+model ScheduledMessage {
+  id             String       @id @default(cuid())
+  conversationId String       @db.Text
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String       @db.Text
+  sender         User         @relation("ScheduledSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content        String       @db.Text
+  sendAt         DateTime
+  status         String       @default("pending") @db.VarChar(20)
+  sentAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status, sendAt])
+  @@index([conversationId, senderId])
+}
+
+model LiveLocationShare {
+  id             String       @id @default(cuid())
+  conversationId String       @db.Text
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String       @db.Text
+  sender         User         @relation("LocationSender", fields: [senderId], references: [id], onDelete: Cascade)
+  latitude       Float
+  longitude      Float
+  expiresAt      DateTime
+  stoppedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([conversationId, expiresAt])
+  @@index([senderId, stoppedAt])
 }
