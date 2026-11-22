@@ -24,6 +24,7 @@ import {
   rateLimit as memLimit,
   prisma,
 } from './modules/index.js';
+import oneToOneRoutes, { initOneToOneCallHandler, startOneToOneMaintenance } from './oneToOneFeatures.js';
 
 dotenv.config();
 
@@ -116,6 +117,7 @@ app.use('/api/upload', authenticateToken, uploadLimiter, uploadRoutes);
 app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/ai', authenticateToken, aiLimiter, aiRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
+app.use('/api/one-to-one', oneToOneRoutes);
 
 io.use(async (socket, next) => {
   try {
@@ -137,6 +139,8 @@ io.use(async (socket, next) => {
 
 initChatHandler(io, prisma);
 initPresenceHandler(io, prisma);
+initOneToOneCallHandler(io, prisma);
+const oneToOneMaintenanceTimer = startOneToOneMaintenance(io);
 
 io.on('connection', (socket) => {
   if (socket.userId) socket.join(`user:${socket.userId}`);
@@ -153,6 +157,7 @@ httpServer.listen(PORT, '0.0.0.0', () => {
 });
 
 async function shutdown(signal) {
+  clearInterval(oneToOneMaintenanceTimer);
   httpServer.close(async () => {
     try { await prisma.$disconnect(); } catch (_) {}
     process.exit(0);
