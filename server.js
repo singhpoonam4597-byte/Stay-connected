@@ -24,7 +24,8 @@ import {
   rateLimit as memLimit,
   prisma,
 } from './modules/index.js';
-import oneToOneRoutes, { initOneToOneCallHandler, startOneToOneMaintenance } from './oneToOneFeatures.js';
+import oneToOneRoutes, { startOneToOneMaintenance } from './oneToOneFeatures.js';
+import { initOneToOneCallHandler } from './callSignals.js';
 import { startOneToOneDataSafety } from './oneToOneDataSafety.js';
 
 dotenv.config();
