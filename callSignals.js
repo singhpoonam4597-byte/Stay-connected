@@ -42,6 +42,8 @@ async function recordCallHistory(prismaClient, io, {
         ? 'completed'
         : 'unanswered';
 
+    // Store structured meta as JSON content so the frontend can render CallHistoryCard
+    // without a schema migration. Include callId for idempotency checks.
     const meta = {
       v: 1,
       callId,
@@ -96,9 +98,10 @@ async function recordCallHistory(prismaClient, io, {
       },
     });
 
+    const callMeta = meta;
     const safeMessage = {
       ...message,
-      callMeta: meta,
+      callMeta,
       isStarredByMe: false,
       attachments: [],
     };
@@ -115,6 +118,7 @@ async function recordCallHistory(prismaClient, io, {
 }
 
 export function initOneToOneCallHandler(io, prismaClient = prisma) {
+  // ringing + media-upgrade are lightweight relays; decline/end also write call history
   const callEvents = [
     'call:invite',
     'call:offer',
@@ -157,6 +161,7 @@ export function initOneToOneCallHandler(io, prismaClient = prisma) {
             return socket.emit('call:error', { callId, message: 'Invalid call type' });
           }
           payload.mediaType = data.mediaType;
+          // Prefer display name from DB when available
           try {
             const me = await prismaClient.user.findUnique({
               where: { id: userId },
@@ -187,13 +192,14 @@ export function initOneToOneCallHandler(io, prismaClient = prisma) {
           }
           payload.candidate = data.candidate;
         } else if (eventName === 'call:ringing') {
-          // acknowledgement only
+          // no extra payload; peer only needs acknowledgement that device is ringing
         } else if (eventName === 'call:media-upgrade') {
           if (data.mediaType === 'video') payload.mediaType = 'video';
         }
 
         io.to(`user:${peerId}`).emit(eventName, payload);
 
+        // Persist call activity once when the call terminates
         if (eventName === 'call:decline' || eventName === 'call:end') {
           const mediaType = data.mediaType === 'video' ? 'video' : 'audio';
           const durationMs = Number(data.durationMs) || 0;
@@ -208,6 +214,8 @@ export function initOneToOneCallHandler(io, prismaClient = prisma) {
             status = 'missed';
           }
 
+          // Actor is the user who hung up / declined. Direction from their POV.
+          // For decline by callee: actor=in, for end by either: use payload if present
           const directionForActor =
             eventName === 'call:decline'
               ? 'in'
